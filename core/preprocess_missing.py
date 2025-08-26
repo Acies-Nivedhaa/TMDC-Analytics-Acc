@@ -32,7 +32,6 @@ def _missing_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _choices_for(s: pd.Series) -> list[str]:
-    """Return only relevant imputation choices for this series."""
     if is_datetime64_any_dtype(s):
         return [
             "Leave as-is",
@@ -70,8 +69,21 @@ def _choices_for(s: pd.Series) -> list[str]:
     ]
 
 
+# map nice labels -> pandas aliases
+_DT_FREQS = {
+    "Auto (no grouping)": None,
+    "Hourly": "H",
+    "Daily": "D",
+    "Weekly": "W",
+    "Monthly": "M",
+    "Quarterly": "Q",
+    "Yearly": "Y",
+    "Minute": "T",
+}
+
+
 def render_preprocess_missing(ss) -> None:
-    """Preprocess ▸ Missing values (dtype-aware, in-place apply)."""
+    """Preprocess ▸ Missing values (dtype-aware, with datetime frequency for ffill/bfill)."""
     if not ss.active_ds or ss.active_ds not in ss.datasets:
         st.info("Pick a dataset to begin.")
         st.stop()
@@ -93,11 +105,12 @@ def render_preprocess_missing(ss) -> None:
             st.success("No missing values found 🎉")
         return
 
-    # persist user choices in session
-    ss.setdefault("pp_missing_choice", {})   # column -> choice
-    ss.setdefault("pp_missing_const", {})    # column -> constant (str)
+    # persist user choices
+    ss.setdefault("pp_missing_choice", {})      # column -> choice
+    ss.setdefault("pp_missing_const", {})       # column -> constant (str)
+    ss.setdefault("pp_missing_dt_freq", {})     # column -> dt freq label
 
-    # ----- per column controls (dtype-aware)
+    # ----- per column controls -----
     with section("Per-column handling", expandable=False):
         st.caption("Only columns that have missing values are shown.")
         for _, row in mt.iterrows():
@@ -106,8 +119,7 @@ def render_preprocess_missing(ss) -> None:
             choices = _choices_for(s)
             label = f"{c} — {row['missing']} nulls ({row['missing_%']}%) [{s.dtype}]"
 
-            # two-column inline layout: left = action, right = constant
-            col_sel, col_const = st.columns([0.62, 0.38])
+            col_sel, col_extra = st.columns([0.62, 0.38])
 
             with col_sel:
                 choice = st.selectbox(
@@ -119,30 +131,43 @@ def render_preprocess_missing(ss) -> None:
                 )
             ss.pp_missing_choice[c] = choice
 
-            with col_const:
-                show_const = (choice == "Constant…")
-                if pd.api.types.is_numeric_dtype(s):
-                    placeholder = "e.g., 0 or 99.9"
-                elif pd.api.types.is_datetime64_any_dtype(s):
-                    placeholder = "e.g., 2024-01-01 09:30"
+            with col_extra:
+                # Datetime: when ffill/bfill, ask for frequency
+                if is_datetime64_any_dtype(s) and choice in ("Forward fill (ffill)", "Backward fill (bfill)"):
+                    freq_label_default = ss.pp_missing_dt_freq.get(c, "Auto (no grouping)")
+                    freq_label = st.selectbox(
+                        f"Frequency for {c}",
+                        list(_DT_FREQS.keys()),
+                        index=list(_DT_FREQS.keys()).index(freq_label_default) if freq_label_default in _DT_FREQS else 0,
+                        key=f"pp_mv_dt_freq_{c}",
+                        help="Choose a calendar bucket to restrict filling within periods (e.g., per day/month).",
+                    )
+                    ss.pp_missing_dt_freq[c] = freq_label
                 else:
-                    placeholder = "e.g., Unknown"
+                    # Constant input handling (numeric / text / datetime)
+                    show_const = (choice == "Constant…")
+                    if is_numeric_dtype(s):
+                        placeholder = "e.g., 0 or 99.9"
+                    elif is_datetime64_any_dtype(s):
+                        placeholder = "e.g., 2024-01-01 09:30"
+                    else:
+                        placeholder = "e.g., Unknown"
 
-                const_val = st.text_input(
-                    f"Constant for {c}",
-                    value=ss.pp_missing_const.get(c, ""),
-                    key=f"pp_mv_const_{c}",
-                    placeholder=placeholder,
-                    disabled=not show_const,
-                )
-                if show_const:
-                    ss.pp_missing_const[c] = const_val
+                    const_val = st.text_input(
+                        f"Constant for {c}",
+                        value=ss.pp_missing_const.get(c, ""),
+                        key=f"pp_mv_const_{c}",
+                        placeholder=placeholder,
+                        disabled=not show_const,
+                    )
+                    if show_const:
+                        ss.pp_missing_const[c] = const_val
 
     # ----- current missingness table
     with section("Current missingness (before apply)", expandable=True):
         render_table(mt, height=260)
 
-    # ----- apply helpers
+    # ----- apply helpers -----
     def _apply(df_in: pd.DataFrame) -> pd.DataFrame:
         out = df_in.copy()
         rows_drop_mask = pd.Series(False, index=out.index)
@@ -155,16 +180,31 @@ def render_preprocess_missing(ss) -> None:
             # DATETIME
             if is_datetime64_any_dtype(s):
                 s_dt = pd.to_datetime(s, errors="coerce")
+
                 if choice == "Leave as-is":
                     continue
                 if choice == "Drop column":
                     out = out.drop(columns=[c]); continue
                 if choice == "Drop rows where missing":
                     rows_drop_mask |= s_dt.isna(); continue
-                if choice == "Forward fill (ffill)":
-                    out[c] = s_dt.fillna(method="ffill"); continue
-                if choice == "Backward fill (bfill)":
-                    out[c] = s_dt.fillna(method="bfill"); continue
+
+                # frequency-aware ffill/bfill (no reindex; fill within calendar bucket)
+                if choice in ("Forward fill (ffill)", "Backward fill (bfill)"):
+                    freq_label = ss.pp_missing_dt_freq.get(c, "Auto (no grouping)")
+                    freq = _DT_FREQS.get(freq_label)
+                    if freq:
+                        tmp = pd.DataFrame({"s": s_dt})
+                        tmp["_bucket"] = tmp["s"].dt.to_period(freq)
+                        if choice == "Forward fill (ffill)":
+                            tmp["s"] = tmp.groupby("_bucket", group_keys=False)["s"].apply(lambda x: x.ffill())
+                        else:
+                            tmp["s"] = tmp.groupby("_bucket", group_keys=False)["s"].apply(lambda x: x.bfill())
+                        out[c] = tmp["s"]
+                    else:
+                        # classic fill across all rows
+                        out[c] = s_dt.fillna(method="ffill" if choice.startswith("Forward") else "bfill")
+                    continue
+
                 if choice == "Fill with most frequent":
                     mv = _mode_safe(s_dt)
                     if mv is not None: out[c] = s_dt.fillna(mv); continue
@@ -200,10 +240,8 @@ def render_preprocess_missing(ss) -> None:
                     out[c] = s.interpolate(method="linear"); continue
                 if choice == "Constant…":
                     raw = ss.pp_missing_const.get(c, "")
-                    try:
-                        val = float(raw)
-                    except Exception:
-                        val = np.nan
+                    try: val = float(raw)
+                    except Exception: val = np.nan
                     out[c] = s.fillna(val); continue
 
             # CATEGORICAL / TEXT
@@ -227,27 +265,17 @@ def render_preprocess_missing(ss) -> None:
             out = out.loc[~rows_drop_mask].reset_index(drop=True)
         return out
 
-    # ----- preview / apply (in-place, no "save as new")
+    # ----- preview / apply
     with section("Apply", expandable=False):
-        cprev, capply = st.columns([0.7, 0.3])
+        if st.button("Preview result", key="pp_mv_preview"):
+            preview = _apply(df)
+            st.write(f"Result: **{preview.shape[0]:,} × {preview.shape[1]:,}** "
+                     f"(was {rows:,} × {cols})")
+            render_table(_missing_table(preview), height=260)
+            st.dataframe(preview.head(20), use_container_width=True)
 
-        with cprev:
-            if st.button("Preview result", key="pp_mv_preview"):
-                preview = _apply(df)
-                st.write(
-                    f"Result: **{preview.shape[0]:,} × {preview.shape[1]:,}** "
-                    f"(was {rows:,} × {cols})"
-                )
-                render_table(_missing_table(preview), height=260)
-                st.dataframe(preview.head(20), use_container_width=True)
-
-        with capply:
-            if st.button("Apply null handling", type="primary", key="pp_mv_apply"):
-                out = _apply(df)
-                # keep for Undo, then overwrite active dataset
-                ss.df_history.append(df.copy())
-                ss.datasets[ss.active_ds] = out
-                st.success(f"Applied to **{ss.active_ds}**. Use **Undo** to revert.")
-                ss.activity_log.append(f"Applied missing-value handling on '{ss.active_ds}'.")
-                st.rerun()
-
+        if st.button("Apply Missing Handling", type="primary", key="pp_mv_apply"):
+            out = _apply(df)
+            ss.df_history.append(df.copy())  # undo
+            ss.datasets[ss.active_ds] = out
+            st.success(f"Applied to **{ss.active_ds}**.")

@@ -1,240 +1,247 @@
-# core/preprocess_outliers.py
 from __future__ import annotations
 import numpy as np
 import pandas as pd
 import streamlit as st
+import altair as alt
 from pandas.api.types import is_numeric_dtype
 
-from ui.components import section, render_table, kpi_row
+from ui.components import section, kpi_row, render_table
 
 
 # ---------- helpers ----------
-def _iqr_bounds(s: pd.Series, k: float) -> tuple[float | None, float | None]:
-    x = pd.to_numeric(s, errors="coerce")
-    q1, q3 = x.quantile(0.25), x.quantile(0.75)
+
+def _iqr_bounds(s: pd.Series, k: float):
+    q1, q3 = s.quantile([0.25, 0.75])
     iqr = q3 - q1
-    if not np.isfinite(iqr) or iqr == 0:
-        return None, None
     return (q1 - k * iqr, q3 + k * iqr)
 
-def _clip_both(s: pd.Series, lo: float | None, hi: float | None) -> pd.Series:
-    x = pd.to_numeric(s, errors="coerce")
-    if lo is not None:
-        x = np.where(x < lo, lo, x)
-    if hi is not None:
-        x = np.where(x > hi, hi, x)
-    return pd.Series(x, index=s.index, dtype=s.dtype)
+def _zscore_bounds(s: pd.Series, k: float):
+    mu, sd = s.mean(), s.std(ddof=0)
+    if pd.isna(sd) or sd == 0:
+        return (-np.inf, np.inf)
+    return (mu - k * sd, mu + k * sd)
 
-def _affect_mask(s: pd.Series, lo: float | None, hi: float | None, tail: str) -> pd.Series:
-    x = pd.to_numeric(s, errors="coerce")
-    if tail == "both":
-        m = ( (lo is not None) & (x < lo) ) | ( (hi is not None) & (x > hi) )
-    elif tail == "high":
-        m = (hi is not None) & (x > hi)
-    else:  # "low"
-        m = (lo is not None) & (x < lo)
-    return pd.Series(np.where(pd.isna(x), False, m), index=s.index)
+def _modified_z_bounds(s: pd.Series, k: float):
+    med = s.median()
+    mad = (s - med).abs().median()
+    if pd.isna(mad) or mad == 0:
+        return (-np.inf, np.inf)
+    # 1.4826 makes MAD consistent with std for normal data
+    scale = 1.4826 * mad
+    return (med - k * scale, med + k * scale)
+
+def _percentile_bounds(s: pd.Series, p_low: float, p_high: float):
+    lo = np.clip(p_low / 100.0, 0.0, 1.0)
+    hi = np.clip(p_high / 100.0, 0.0, 1.0)
+    if hi <= lo:
+        return (-np.inf, np.inf)
+    return tuple(s.quantile([lo, hi]).tolist())
+
+def _calc_bounds(s: pd.Series, method: str, params: dict[str, float]):
+    s = pd.to_numeric(s, errors="coerce").dropna()
+    if s.empty:
+        return (-np.inf, np.inf)
+
+    if method == "IQR (Tukey fences)":
+        return _iqr_bounds(s, params.get("k_iqr", 1.5))
+    if method == "Z-score (μ ± k·σ)":
+        return _zscore_bounds(s, params.get("k_z", 3.0))
+    if method == "Modified Z (median ± k·1.4826·MAD)":
+        return _modified_z_bounds(s, params.get("k_mad", 3.5))
+    if method == "Percentiles (p_low / p_high)":
+        return _percentile_bounds(s, params.get("p_low", 1.0), params.get("p_high", 99.0))
+
+    # fallback
+    return (-np.inf, np.inf)
+
+def _apply_action(col: pd.Series, bounds: tuple[float, float], action: str):
+    lo, hi = bounds
+    if action == "Clip to bounds (winsorize)":
+        return col.clip(lo, hi)
+    if action == "Set outliers to NaN":
+        mask = (col < lo) | (col > hi)
+        return col.mask(mask)
+    if action == "Drop rows with outliers":
+        # Handled at frame-level (we just return original col here)
+        return col
+    return col
 
 
-# ---------- main ----------
+def _box_plot(df: pd.DataFrame, column: str, title: str):
+    # altair boxplot; df[column] should be numeric
+    plot_df = df[[column]].rename(columns={column: "value"}).dropna()
+    if plot_df.empty:
+        return st.caption("No data to plot.")
+    chart = alt.Chart(plot_df).mark_boxplot(size=60).encode(y=alt.Y("value:Q", title=column)).properties(height=220, title=title)
+    st.altair_chart(chart, use_container_width=True)
+
+
+# ---------- main UI ----------
+
 def render_preprocess_outliers(ss) -> None:
-    """Preprocess ▸ Outliers with top plain-English summary + box-plot-only preview."""
-    import numpy as np
-    import pandas as pd
-    import streamlit as st
-    import matplotlib.pyplot as plt
-    from pandas.api.types import is_numeric_dtype
-    from ui.components import section, render_table, kpi_row
-
-    # ---- guards ----
+    """Preprocess ▸ Outliers — multiple methods, preview, box-plot, english summary."""
     if not ss.active_ds or ss.active_ds not in ss.datasets:
         st.info("Pick a dataset to begin.")
         st.stop()
 
     df = ss.datasets[ss.active_ds]
     num_cols = [c for c in df.columns if is_numeric_dtype(df[c])]
-    if not num_cols:
+    total_num = len(num_cols)
+
+    if total_num == 0:
         st.info("No numeric columns found.")
-        st.stop()
+        return
 
-    rows, _ = df.shape
-    kpi_row([("Rows", f"{rows:,}"), ("Numeric cols", len(num_cols))])
+    kpi_row([
+        ("Numeric columns", total_num),
+        ("Rows", f"{len(df):,}"),
+    ])
 
-    # ---------- TOP SUMMARY PLACEHOLDER ----------
-    # We fill this AFTER reading the controls below so it always reflects current choices.
-    summary_ph = st.empty()
+    # Persist choices
+    ss.setdefault("out_cols", num_cols[:min(8, total_num)])
+    ss.setdefault("out_method", "IQR (Tukey fences)")
+    ss.setdefault("out_action", "Clip to bounds (winsorize)")
+    ss.setdefault("out_k_iqr", 1.5)
+    ss.setdefault("out_k_z", 3.0)
+    ss.setdefault("out_k_mad", 3.5)
+    ss.setdefault("out_p_low", 1.0)
+    ss.setdefault("out_p_high", 99.0)
+    ss.setdefault("out_vis_col", num_cols[0])
 
-    # ---------- SETUP ----------
     with section("Setup", expandable=False):
-        cols = st.multiselect(
-            "Columns to process",
-            options=num_cols,
-            default=num_cols,
-            help="Only numeric columns are shown.",
-            key="out_cols",
+        st.caption("Pick columns, a detection method, and what to do with detected outliers.")
+        cols_row1 = st.columns([1, 1])
+        with cols_row1[0]:
+            out_cols = st.multiselect(
+                "Columns to process",
+                options=num_cols,
+                default=ss.out_cols,
+                key="out_cols",
+            )
+
+        with cols_row1[1]:
+            method = st.selectbox(
+                "Method",
+                [
+                    "IQR (Tukey fences)",
+                    "Z-score (μ ± k·σ)",
+                    "Modified Z (median ± k·1.4826·MAD)",
+                    "Percentiles (p_low / p_high)",
+                ],
+                index=["IQR (Tukey fences)", "Z-score (μ ± k·σ)", "Modified Z (median ± k·1.4826·MAD)", "Percentiles (p_low / p_high)"].index(ss.out_method),
+                key="out_method",
+            )
+
+        cols_row2 = st.columns([1, 1])
+        with cols_row2[0]:
+            action = st.selectbox(
+                "Action",
+                ["Clip to bounds (winsorize)", "Set outliers to NaN", "Drop rows with outliers"],
+                index=["Clip to bounds (winsorize)", "Set outliers to NaN", "Drop rows with outliers"].index(ss.out_action),
+                key="out_action",
+            )
+
+        # Method-specific parameters
+        if method == "IQR (Tukey fences)":
+            st.slider("IQR multiplier (k)", 1.0, 4.0, float(ss.out_k_iqr), step=0.25, key="out_k_iqr")
+        elif method == "Z-score (μ ± k·σ)":
+            st.slider("Std-dev multiplier (k)", 1.0, 6.0, float(ss.out_k_z), step=0.1, key="out_k_z")
+        elif method == "Modified Z (median ± k·1.4826·MAD)":
+            st.slider("MAD multiplier (k)", 1.0, 10.0, float(ss.out_k_mad), step=0.1, key="out_k_mad")
+        else:  # Percentiles
+            c_lo, c_hi = st.columns(2)
+            with c_lo:
+                st.slider("Lower percentile", 0.0, 20.0, float(ss.out_p_low), step=0.5, key="out_p_low")
+            with c_hi:
+                st.slider("Upper percentile", 80.0, 100.0, float(ss.out_p_high), step=0.5, key="out_p_high")
+            if ss.out_p_high <= ss.out_p_low:
+                st.warning("Upper percentile must be greater than lower percentile.")
+
+    # ----- Plain-English summary (top) -----
+    param_txt = {
+        "IQR (Tukey fences)": f"k={ss.out_k_iqr:.2f}",
+        "Z-score (μ ± k·σ)": f"k={ss.out_k_z:.2f}",
+        "Modified Z (median ± k·1.4826·MAD)": f"k={ss.out_k_mad:.2f}",
+        "Percentiles (p_low / p_high)": f"p_low={ss.out_p_low:.1f}%, p_high={ss.out_p_high:.1f}%",
+    }[method]
+
+    st.info(
+        f"**Plan:** Detect outliers in **{len(out_cols)}** column(s) using **{method}** ({param_txt}); "
+        f"then **{action}**."
+    )
+
+    # ----- Preview + Stats -----
+    def _compute_bounds_for_all():
+        params = dict(
+            k_iqr=ss.out_k_iqr,
+            k_z=ss.out_k_z,
+            k_mad=ss.out_k_mad,
+            p_low=ss.out_p_low,
+            p_high=ss.out_p_high,
         )
+        rows = []
+        for c in out_cols:
+            s = pd.to_numeric(df[c], errors="coerce")
+            lo, hi = _calc_bounds(s, method, params)
+            n_out = int(((s < lo) | (s > hi)).sum())
+            rows.append({"column": c, "lower": lo, "upper": hi, "outliers": n_out})
+        return pd.DataFrame(rows)
 
-        method = st.selectbox(
-            "Method",
-            ["IQR (Tukey fences)"],
-            index=0,
-            key="out_method",
-        )
-
-        action = st.selectbox(
-            "Action",
-            [
-                "Clip to bounds (winsorize)",
-                "Cap high tail only",
-                "Flag outliers (add boolean columns)",
-                "Remove outlier rows",
-            ],
-            index=0,
-            key="out_action",
-        )
-
-        k = st.slider(
-            "IQR multiplier (k)",
-            min_value=1.0, max_value=4.0, step=0.25, value=1.5,
-            key="out_k",
-            help="Larger k = looser bounds (fewer outliers)."
-        )
-
-    # ---------- HELPERS ----------
-    def _iqr_bounds(s: pd.Series, k: float) -> tuple[float | None, float | None]:
-        x = pd.to_numeric(s, errors="coerce")
-        q1, q3 = x.quantile(0.25), x.quantile(0.75)
-        iqr = q3 - q1
-        if not np.isfinite(iqr) or iqr == 0:
-            return None, None
-        return (q1 - k * iqr, q3 + k * iqr)
-
-    def _clip_both(s: pd.Series, lo: float | None, hi: float | None) -> pd.Series:
-        x = pd.to_numeric(s, errors="coerce")
-        if lo is not None:
-            x = np.where(x < lo, lo, x)
-        if hi is not None:
-            x = np.where(x > hi, hi, x)
-        return pd.Series(x, index=s.index, dtype=s.dtype)
-
-    def _affect_mask(s: pd.Series, lo: float | None, hi: float | None, tail: str) -> pd.Series:
-        x = pd.to_numeric(s, errors="coerce")
-        if tail == "both":
-            m = ((lo is not None) & (x < lo)) | ((hi is not None) & (x > hi))
-        elif tail == "high":
-            m = (hi is not None) & (x > hi)
+    with section("What will change", expandable=False):
+        if not out_cols:
+            st.caption("Select at least one numeric column.")
         else:
-            m = (lo is not None) & (x < lo)
-        return pd.Series(np.where(pd.isna(x), False, m), index=s.index)
+            tbl = _compute_bounds_for_all()
+            render_table(tbl, height=240)
 
-    # ---------- PLAIN-ENGLISH SUMMARY (TOP) ----------
-    def _summary_text() -> str:
-        if not cols:
-            return "No columns selected yet. Choose one or more numeric columns below."
-        if action == "Clip to bounds (winsorize)":
-            act = "cap extremely low and high values to reasonable limits"
-        elif action == "Cap high tail only":
-            act = "cap only unusually high values to a reasonable limit"
-        elif action == "Flag outliers (add boolean columns)":
-            act = "add a new true/false column per field indicating outliers"
-        else:
-            act = "remove rows that contain outlier values"
-
-        col_list = ", ".join(cols[:5]) + ("…" if len(cols) > 5 else "")
-        return (
-            f"We’ll analyze **{len(cols)}** column(s) ({col_list}) with the **IQR** method. "
-            f"Values outside the IQR range using *k = {k}* are flagged as outliers, then we’ll **{act}**.\n\n"
-            "IQR uses the middle 50% (25th–75th percentiles), which is robust to extreme values."
-        )
-
-    # Fill the top summary now that we have the current control values
-    summary_ph.info(_summary_text())
-
-    # ---------- PREVIEW (with box plot only) ----------
-    def _preview(df_in: pd.DataFrame):
-        out = df_in.copy()
-        per_col = []
-        tail = "both" if action in ["Clip to bounds (winsorize)", "Remove outlier rows", "Flag outliers (add boolean columns)"] else "high"
-
-        for c in cols:
-            s = out[c]
-            lo, hi = _iqr_bounds(s, k)
-            mask = _affect_mask(s, lo, hi, tail if action != "Flag outliers (add boolean columns)" else "both")
-            n_aff = int(mask.sum())
-
-            if action == "Clip to bounds (winsorize)":
-                out[c] = _clip_both(s, lo, hi)
-            elif action == "Cap high tail only":
-                out[c] = _clip_both(s, None, hi)
-            elif action == "Flag outliers (add boolean columns)":
-                out[f"is_outlier_{c}"] = mask.astype(bool)
-            elif action == "Remove outlier rows":
-                # defer actual drop after computing per-col stats
-                pass
-
-            per_col.append({
-                "column": c,
-                "lower_bound": None if lo is None else float(lo),
-                "upper_bound": None if hi is None else float(hi),
-                "rows_outside": n_aff,
-                "pct_rows": round(100 * (n_aff / len(out)) if len(out) else 0.0, 2),
-            })
-
-        if action == "Remove outlier rows":
-            drop_mask = pd.Series(False, index=out.index)
-            for c in cols:
-                lo, hi = _iqr_bounds(out[c], k)
-                drop_mask |= _affect_mask(out[c], lo, hi, tail="both")
-            out = out.loc[~drop_mask].reset_index(drop=True)
-
-        return out, pd.DataFrame(per_col)
-
-    with section("Preview", expandable=False):
-        if st.button("Preview changes", key="out_preview_btn", type="primary"):
-            if not cols:
-                st.warning("Pick at least one column.")
+    # ----- Visualization (box plot: before vs after for a single column) -----
+    with section("Preview (box plot)", expandable=True):
+        vis_col = st.selectbox("Visualize a single column", options=(out_cols or num_cols), index=0, key="out_vis_col")
+        if vis_col:
+            # Before
+            _box_plot(df, vis_col, title="Before")
+            # After (simulate)
+            params = dict(k_iqr=ss.out_k_iqr, k_z=ss.out_k_z, k_mad=ss.out_k_mad, p_low=ss.out_p_low, p_high=ss.out_p_high)
+            lo, hi = _calc_bounds(pd.to_numeric(df[vis_col], errors="coerce"), method, params)
+            s_after = _apply_action(pd.to_numeric(df[vis_col], errors="coerce"), (lo, hi), action)
+            if action == "Drop rows with outliers":
+                mask_keep = (pd.to_numeric(df[vis_col], errors="coerce") >= lo) & (pd.to_numeric(df[vis_col], errors="coerce") <= hi)
+                df_after = df.loc[mask_keep].copy()
+                _box_plot(df_after, vis_col, title="After (drop rows)")
             else:
-                prev_df, stats = _preview(df)
-                ss["out_prev_df"] = prev_df
-                ss["out_prev_stats"] = stats
-                ss["out_prev_ready"] = True
+                df_tmp = df.copy()
+                df_tmp[vis_col] = s_after
+                _box_plot(df_tmp, vis_col, title="After")
 
-        if ss.get("out_prev_ready"):
-            stats = ss.get("out_prev_stats")
-            prev_df = ss.get("out_prev_df")
+    # ----- Apply -----
+    def _apply_all(dfin: pd.DataFrame) -> pd.DataFrame:
+        params = dict(k_iqr=ss.out_k_iqr, k_z=ss.out_k_z, k_mad=ss.out_k_mad, p_low=ss.out_p_low, p_high=ss.out_p_high)
+        d = dfin.copy()
+        if action == "Drop rows with outliers":
+            keep_mask = pd.Series(True, index=d.index)
+            for c in out_cols:
+                s = pd.to_numeric(d[c], errors="coerce")
+                lo, hi = _calc_bounds(s, method, params)
+                keep_mask &= (s >= lo) & (s <= hi)
+            return d.loc[keep_mask].reset_index(drop=True)
 
-            if isinstance(stats, pd.DataFrame) and not stats.empty:
-                st.subheader("What will change")
-                render_table(stats)
-                st.caption("`rows_outside` = rows that would be clipped/flagged/removed per column.")
+        # Column-wise replacement
+        for c in out_cols:
+            s = pd.to_numeric(d[c], errors="coerce")
+            lo, hi = _calc_bounds(s, method, params)
+            d[c] = _apply_action(s, (lo, hi), action)
+        return d
 
-            # ----- BOX PLOT ONLY: before vs after -----
-            plot_cols = [c for c in cols if c in df.columns]
-            if plot_cols:
-                plot_col = st.selectbox("Visualize column", plot_cols, key="out_plot_col")
-                before = pd.to_numeric(df[plot_col], errors="coerce").dropna()
-                after  = pd.to_numeric(prev_df[plot_col], errors="coerce").dropna()
+    cprev, capply = st.columns([1, 1])
+    with cprev:
+        if st.button("Preview", key="out_preview_btn"):
+            prev = _apply_all(df)
+            st.caption(f"Result: **{prev.shape[0]:,} × {prev.shape[1]:,}** (was {df.shape[0]:,} × {df.shape[1]:,})")
+            st.dataframe(prev.head(25), use_container_width=True)
 
-                fig, ax = plt.subplots()
-                ax.boxplot([before, after], labels=["before", "after"], showfliers=True)
-                ax.set_ylabel(plot_col)
-                st.pyplot(fig)
-
-            st.subheader("Preview data (first 20 rows)")
-            st.dataframe(prev_df.head(20), use_container_width=True)
-
-    # ---------- APPLY ----------
-    with section("Apply", expandable=False):
-        disabled = not ss.get("out_prev_ready", False)
-        if disabled:
-            st.caption("Run **Preview changes** first. You can always **Undo** from the top bar.")
-        if st.button("Apply", key="out_apply_btn", disabled=disabled):
-            out_df = ss.get("out_prev_df")
-            if out_df is None:
-                st.warning("No preview found. Click **Preview changes** first.")
-            else:
-                ss.df_history.append(df.copy())   # undo
-                ss.datasets[ss.active_ds] = out_df
-                st.success(f"Applied to **{ss.active_ds}**.")
-                for k in ["out_prev_df", "out_prev_stats", "out_prev_ready"]:
-                    ss.pop(k, None)
+    with capply:
+        if st.button("Apply", key="out_apply_btn"):
+            out = _apply_all(df)
+            ss.df_history.append(df.copy())
+            ss.datasets[ss.active_ds] = out
+            st.success("Outlier handling applied.")
