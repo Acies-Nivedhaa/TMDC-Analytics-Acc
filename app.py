@@ -17,6 +17,15 @@ from core.eda_correlation import render_correlation
 from core.preprocess_overview import render_preprocess_overview
 from core.preprocess_missing import render_preprocess_missing
 from core.preprocess_outliers import render_preprocess_outliers
+from core.preprocess_text import render_preprocess_text
+from core.preprocess_timeseries import render_preprocess_timeseries
+from core.preprocess_encoding import render_preprocess_encoding
+from core.eda_types import render_eda_types
+from core.final_summary import render_final_summary
+from ui.components import section
+
+
+
 
 
 
@@ -80,7 +89,6 @@ def render_left_steps():
         ("Summary", "📁"),
         ("EDA", "📊"),
         ("Preprocess", "🧹"),
-        ("ML", "🤖"),
         ("Final Summary", "✅"),
     ]
     eda_badge = f" • {len(st.session_state.get('datasets', {}))}"
@@ -429,12 +437,15 @@ with right:
             df = ss.datasets[ss.active_ds]
 
             # ---- subtabs ----
-            tab_overview, tab_missing, tab_univariate, tab_bivariate, tab_correlation, tab_combine = st.tabs(
-                ["Overview", "Missingness", "Univariate", "Bivariate", "Correlation", "Combine datasets"]
+            tab_overview, tab_types, tab_combine, tab_missing, tab_univariate, tab_bivariate, tab_correlation = st.tabs(
+                ["Overview", "Types", "Combine datasets", "Missingness", "Univariate", "Bivariate", "Correlation"]
             )
 
             with tab_overview:
                 render_overview(df)
+
+            with tab_types:
+                render_eda_types(st.session_state)
 
             with tab_missing:
                 render_missingness(df)
@@ -471,7 +482,6 @@ with right:
             ["Overview", "Missing values", "Outliers", "Text", "Time Series", "Encoding"]
         )
 
-        from core.preprocess_overview import render_preprocess_overview  # if you added it earlier
         with tab_overview:
             render_preprocess_overview(ss)
 
@@ -481,7 +491,34 @@ with right:
         with tab_outliers:
             render_preprocess_outliers(ss)
 
+        with tab_text:
+            render_preprocess_text(ss)
 
-        # leave the other tabs for later
+        with tab_ts:
+            render_preprocess_timeseries(st.session_state)
+
+        with tab_encoding:
+            render_preprocess_encoding(st.session_state)
+
+    # =========================================================
+    # FINAL SUMMARY STEP
+    # =========================================================
+    elif ss.step == "Final Summary":
+        if not ss.datasets:
+            st.info("Upload one or more files in **Summary** to begin.")
+            st.stop()
+
+        # keep active_ds valid
+        names_all = sorted(ss.datasets.keys())
+        if ss.active_ds not in names_all:
+            ss.active_ds = names_all[0]
+
+        df = ss.datasets[ss.active_ds]
+
+        st.subheader("Final Summary")
+        # Outstanding issues + KPIs + compact preview (from core/final_summary.py)
+        render_final_summary(df, st.session_state)
+
+
 
 

@@ -32,12 +32,34 @@ def steps_nav(steps: List[str], selected: str = "Summary"):
     st.radio("Steps", steps, index=idx)
 
 
-def kpi_row(items: Iterable[Tuple[str, str]]):
-    items = list(items)
+def kpi_row(items):
+    """
+    Display KPIs without truncation. `items` = list[(label, value)].
+    """
+    import streamlit as st
+
+    st.markdown("""
+    <style>
+      .kpi-wrap {display:flex; gap:12px;}
+      .kpi {flex:1; border:1px solid rgba(0,0,0,.08); border-radius:10px;
+            padding:10px 12px; background: var(--background-color);}
+      .kpi .label {font-size:.78rem; color:rgba(0,0,0,.6);}
+      .kpi .value {font-size:1.05rem; font-weight:600; line-height:1.2;
+                   white-space:normal; overflow:visible; text-overflow:unset;
+                   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Streamlit columns + HTML so they behave nicely on narrow widths
     cols = st.columns(len(items))
-    for col, (label, value) in zip(cols, items):
+    for (label, value), col in zip(items, cols):
         with col:
-            st.metric(label, value)
+            st.markdown(
+                f'<div class="kpi"><div class="label">{label}</div>'
+                f'<div class="value">{value}</div></div>',
+                unsafe_allow_html=True
+            )
+
 
 
 class section:
