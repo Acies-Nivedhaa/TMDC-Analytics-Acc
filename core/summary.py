@@ -1,8 +1,22 @@
+# core/summary.py
 from __future__ import annotations
 import numpy as np
 import pandas as pd
 from typing import Dict, List
 import json as _json
+from io import BytesIO
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.units import cm
+    _REPORTLAB_OK = True
+except Exception:
+    _REPORTLAB_OK = False
+
+
+
 
 __all__ = [
     "overview_stats",
@@ -13,8 +27,8 @@ __all__ = [
     "dataset_meta",
     "demo_data",
     "nunique_safe",
+    "build_summary_pdf",        # <-- NEW: export Summary as PDF
 ]
-
 
 def overview_stats(df: pd.DataFrame) -> Dict[str, float]:
     n_rows, n_cols = df.shape
@@ -31,9 +45,223 @@ def overview_stats(df: pd.DataFrame) -> Dict[str, float]:
         "n_duplicates": n_dup,
     }
 
+def build_summary_pdf(
+    active_name: str,
+    df: pd.DataFrame,
+    datasets: dict[str, pd.DataFrame] | None = None,
+) -> bytes:
+    """
+    Build a PDF that mirrors the Summary page:
+    - Datasets overview (if provided)
+    - KPIs for active dataset
+    - Profile/meta
+    - Schema (column + dtype)
+    - Data preview (first 20 rows, first 10 cols)
+    - Cardinality (nunique per column, sorted)
+    - Column quick stats
+    - Suggested actions
+    """
+    # Lazy import so users without reportlab don't break normal app usage
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import (
+            SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+        )
+    except Exception as e:
+        raise ImportError(
+            "reportlab is required for PDF export. Install with: pip install reportlab"
+        ) from e
+
+    from io import BytesIO
+
+    # ---- helpers ---------------------------------------------------------
+    styles = getSampleStyleSheet()
+    h1 = styles["Heading1"]
+    h2 = styles["Heading2"]
+    h3 = styles["Heading3"]
+    body = styles["BodyText"]
+
+    # tighter paragraph
+    small = ParagraphStyle("small", parent=body, fontSize=9, leading=11)
+    tiny  = ParagraphStyle("tiny", parent=body, fontSize=8, leading=10)
+
+    def _df_to_table(df_in: pd.DataFrame, max_rows: int | None = None, max_cols: int | None = None):
+        """Convert a DataFrame to a ReportLab Table with basic styling."""
+        df_work = df_in.copy()
+        note = None
+        if max_cols is not None and df_work.shape[1] > max_cols:
+            df_work = df_work.iloc[:, :max_cols]
+            note = f"(showing first {max_cols} columns)"
+        if max_rows is not None and df_work.shape[0] > max_rows:
+            df_work = df_work.iloc[:max_rows, :]
+            note = (note + " and " if note else "") + f"(first {max_rows} rows)"
+
+        data = [df_work.columns.tolist()] + [[
+            "" if pd.isna(v) else str(v) for v in row
+        ] for _, row in df_work.iterrows()]
+
+        tbl = Table(data, repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f2f6")),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#c8d1e0")),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        return tbl, note
+
+    def _keyvals_table(kv: dict[str, str]):
+        data = [["Metric", "Value"]] + [[k, str(v)] for k, v in kv.items()]
+        tbl = Table(data, repeatRows=1, colWidths=[140, 360])
+        tbl.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f2f6")),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#c8d1e0")),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ]))
+        return tbl
+
+    # ---- content we already compute on the Summary page -------------------
+    ov = overview_stats(df)
+    meta = dataset_meta(df)
+
+    # Datasets overview (if provided)
+    datasets_df = None
+    if datasets:
+        rows = []
+        for nm, dsub in sorted(datasets.items()):
+            o = overview_stats(dsub)
+            rows.append({
+                "dataset": nm,
+                "rows": f"{o['rows']:,}",
+                "cols": o["cols"],
+                "memory_mb": f"{o['memory_mb']:.2f}",
+                "duplicates": f"{o['n_duplicates']:,}",
+            })
+        if rows:
+            datasets_df = pd.DataFrame(rows)
+
+    # Schema
+    schema_tbl = pd.DataFrame({"column": df.columns, "dtype": [str(t) for t in df.dtypes]})
+
+    # Preview
+    preview_df = df.head(20)
+
+    # Cardinality (show all columns with nunique)
+    schema_local = infer_schema(df)
+    nunique_tbl = (
+        schema_local[["column", "unique"]]
+        .rename(columns={"unique": "nunique"})
+        .sort_values("nunique", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    # Column quick stats
+    col_stats_tbl = column_quick_stats(df, schema_local)
+
+    # Suggested actions
+    tips = suggest_actions(df)
+
+    # ---- Build PDF --------------------------------------------------------
+    buff = BytesIO()
+    doc = SimpleDocTemplate(
+        buff, pagesize=A4, leftMargin=24, rightMargin=24, topMargin=28, bottomMargin=28
+    )
+    story = []
+
+    # Title
+    story.append(Paragraph(f"Summary — {active_name}", h1))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("Analytics Accelerator", small))
+    story.append(Spacer(1, 12))
+
+    # Datasets overview
+    if datasets_df is not None:
+        story.append(Paragraph("Datasets (loaded in session)", h2))
+        tbl, note = _df_to_table(datasets_df, max_rows=40)
+        story.append(tbl)
+        if note:
+            story.append(Paragraph(note, tiny))
+        story.append(Spacer(1, 10))
+
+    # KPIs for active df
+    story.append(Paragraph("Active Dataset — KPIs", h2))
+    kpi_data = {
+        "Rows": f"{ov['rows']:,}",
+        "Columns": ov["cols"],
+        "Memory (MB)": f"{ov['memory_mb']:.2f}",
+        "Duplicate rows": f"{ov['n_duplicates']:,}",
+        "Missing (%)": f"{ov['missing_pct']:.2f}",
+    }
+    story.append(_keyvals_table(kpi_data))
+    story.append(Spacer(1, 10))
+
+    # Meta / profile
+    story.append(Paragraph("Profile & Time Span", h3))
+    meta_text = (
+        f"<b>Profile:</b> {meta['profile']} &nbsp;&nbsp; "
+        f"<b>Numeric cols:</b> {meta['n_numeric']} &nbsp;&nbsp; "
+        f"<b>Categorical cols:</b> {meta['n_categorical']}<br/>"
+        f"<b>Time span:</b> {meta['time_min']} — {meta['time_max']}"
+    )
+    story.append(Paragraph(meta_text, small))
+    story.append(Spacer(1, 10))
+
+    # Schema
+    story.append(Paragraph("Schema (column → dtype)", h2))
+    sch_tbl, note = _df_to_table(schema_tbl, max_rows=120)
+    story.append(sch_tbl)
+    if note:
+        story.append(Paragraph(note, tiny))
+    story.append(Spacer(1, 10))
+
+    # Data preview
+    story.append(Paragraph("Preview (first 20 rows)", h2))
+    prev_tbl, note = _df_to_table(preview_df, max_rows=20, max_cols=10)
+    story.append(prev_tbl)
+    story.append(Paragraph("(first 10 columns shown for width)", tiny))
+    story.append(Spacer(1, 10))
+
+    # Cardinality
+    story.append(Paragraph("Cardinality (nunique per column)", h2))
+    card_tbl, note = _df_to_table(nunique_tbl, max_rows=120)
+    story.append(card_tbl)
+    if note:
+        story.append(Paragraph(note, tiny))
+    story.append(Spacer(1, 10))
+
+    # Column quick stats
+    story.append(Paragraph("Schema & Column Summary", h2))
+    # reorder/clean for readability
+    show_cols = []
+    for c in ["column", "type", "min", "p50", "max", "mean", "std", "unique", "top", "true", "false"]:
+        if c in col_stats_tbl.columns:
+            show_cols.append(c)
+    stats_clean = col_stats_tbl[show_cols].copy()
+    stats_tbl, note = _df_to_table(stats_clean, max_rows=120)
+    story.append(stats_tbl)
+    if note:
+        story.append(Paragraph(note, tiny))
+    story.append(Spacer(1, 10))
+
+    # Suggested actions
+    story.append(Paragraph("Suggested Actions", h2))
+    if tips:
+        for t in tips:
+            story.append(Paragraph(f"• {t}", small))
+    else:
+        story.append(Paragraph("No immediate issues detected.", small))
+
+    # Build PDF
+    doc.build(story)
+    return buff.getvalue()
+
 
 def _is_bool_series(s: pd.Series) -> bool:
-    # Handle pandas BooleanDtype, numpy bool, and int-like 0/1 columns
     try:
         if pd.api.types.is_bool_dtype(s):
             return True
@@ -46,15 +274,12 @@ def _is_bool_series(s: pd.Series) -> bool:
         pass
     return False
 
-
 def _looks_like_datetime(s: pd.Series) -> bool:
-    # Fast path for any datetime64 dtype (including timezone-aware)
     try:
         if pd.api.types.is_datetime64_any_dtype(s):
             return True
     except Exception:
         pass
-    # Heuristic parse for string/object/categorical columns
     try:
         if pd.api.types.is_string_dtype(s) or s.dtype == object or pd.api.types.is_categorical_dtype(s):
             sample = s.dropna().astype(str).head(200)
@@ -66,7 +291,6 @@ def _looks_like_datetime(s: pd.Series) -> bool:
         return False
     return False
 
-
 def infer_schema(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for col in df.columns:
@@ -75,17 +299,15 @@ def infer_schema(df: pd.DataFrame) -> pd.DataFrame:
         miss_pct = float((1 - non_null / len(df)) * 100) if len(df) else 0.0
         nunique = _nunique_safe(s)
 
-        # Logical type inference
         if _is_bool_series(s):
             ltype = "boolean"
         elif pd.api.types.is_numeric_dtype(s):
             ltype = "numeric"
         elif _looks_like_datetime(s):
             ltype = "datetime"
-        elif _has_unhashable(s):  # lists/dicts/sets/tuples in cells
+        elif _has_unhashable(s):
             ltype = "nested"
         else:
-            # object-like strings
             try:
                 median_len = s.dropna().astype(str).str.len().median()
             except Exception:
@@ -105,7 +327,6 @@ def infer_schema(df: pd.DataFrame) -> pd.DataFrame:
             "example": sample_val,
         })
     return pd.DataFrame(rows)
-
 
 def column_quick_stats(df: pd.DataFrame, schema: pd.DataFrame | None = None) -> pd.DataFrame:
     if schema is None:
@@ -139,14 +360,13 @@ def column_quick_stats(df: pd.DataFrame, schema: pd.DataFrame | None = None) -> 
         elif t == "boolean":
             vc = s.dropna().value_counts()
             rec.update({"true": int(vc.get(1, vc.get(True, 0))), "false": int(vc.get(0, vc.get(False, 0)))})
-        else:  # categorical/text/nested
+        else:
             rec.update({
                 "unique": int(_nunique_safe(s)),
                 "top": (s.dropna().mode().iloc[0] if not _has_unhashable(s) and s.dropna().size else None),
             })
         out.append(rec)
     return pd.DataFrame(out)
-
 
 def numeric_correlations(df: pd.DataFrame, top_k: int = 20, min_abs: float = 0.4) -> pd.DataFrame:
     num_df = df.select_dtypes(include=[np.number]).copy()
@@ -162,7 +382,6 @@ def numeric_correlations(df: pd.DataFrame, top_k: int = 20, min_abs: float = 0.4
                 pairs.append({"col_a": cols[i], "col_b": cols[j], "corr": float(val)})
     pairs.sort(key=lambda x: -abs(x["corr"]))
     return pd.DataFrame(pairs[:top_k])
-
 
 def suggest_actions(df: pd.DataFrame) -> List[str]:
     tips: List[str] = []
@@ -204,23 +423,19 @@ def suggest_actions(df: pd.DataFrame) -> List[str]:
             parsed = pd.to_datetime(sample, errors="coerce", infer_datetime_format=True)
             if parsed.notna().mean() > 0.9:
                 tips.append(f"'{r['column']}' looks like a date/time stored as text — parse to datetime.")
-
     return tips
-
 
 def dataset_meta(df: pd.DataFrame) -> Dict[str, str | int]:
     schema = infer_schema(df)
     n_numeric = int((schema["type"] == "numeric").sum())
     n_categorical = int((schema["type"] == "categorical").sum())
 
-    # Find any datetime-ish columns and compute global min/max
     dt_cols = [c for c in df.columns if _looks_like_datetime(df[c])]
     time_min = None
     time_max = None
     for c in dt_cols:
         raw = df[c]
         try:
-            # Avoid categorical min/max errors by converting to string first
             if pd.api.types.is_categorical_dtype(raw):
                 raw = raw.astype("string")
             vals = pd.to_datetime(raw, errors="coerce")
@@ -234,7 +449,6 @@ def dataset_meta(df: pd.DataFrame) -> Dict[str, str | int]:
         except Exception:
             continue
 
-    # Simple profile heuristic
     lower_cols = set([c.lower() for c in df.columns])
     if {"order_id", "customer_id", "sku"} <= lower_cols:
         profile = "retail"
@@ -254,11 +468,9 @@ def dataset_meta(df: pd.DataFrame) -> Dict[str, str | int]:
         "profile": profile,
     }
 
-
 # ---- Helpers for unhashable/nested types ----
 
 def nunique_safe(s: pd.Series) -> int:
-    """Public wrapper to compute unique counts even for unhashable cell types."""
     return _nunique_safe(s)
 
 def _has_unhashable(s: pd.Series) -> bool:
@@ -268,7 +480,6 @@ def _has_unhashable(s: pd.Series) -> bool:
     except Exception:
         return False
 
-
 def _stable_str(v):
     try:
         if isinstance(v, (dict, list, tuple, set)):
@@ -277,13 +488,11 @@ def _stable_str(v):
     except Exception:
         return str(v)
 
-
 def _nunique_safe(s: pd.Series) -> int:
     try:
         return int(s.nunique(dropna=True))
     except TypeError:
         return int(pd.Series(s.map(_stable_str)).nunique(dropna=True))
-
 
 def _n_duplicates_safe(df: pd.DataFrame) -> int:
     try:
@@ -294,7 +503,6 @@ def _n_duplicates_safe(df: pd.DataFrame) -> int:
             if tmp[c].dtype == object and _has_unhashable(tmp[c]):
                 tmp[c] = tmp[c].map(_stable_str)
         return int(tmp.duplicated().sum())
-
 
 # ---- Demo dataset (compact) ----
 
@@ -324,7 +532,7 @@ def demo_data(n_rows: int = 2000, seed: int = 42) -> pd.DataFrame:
     promo_used = (rng.random(n_rows) < 0.35).astype(int)
     discount_rate = np.where(promo_used==1, np.clip(rng.normal(0.22, 0.12, size=n_rows), 0, 0.6), np.nan)
     promo_price = np.where(promo_used==1, base_price*(1-np.nan_to_num(discount_rate, nan=0.0)), base_price)
-    shipping_fee = np.round(np.maximum(0, rng.normal(6, 3, size=n_rows)), 2)
+    shipping_fee = np.round(np.maximum(0, rng.normal(6, 3, size=n_rows)), 2)  # NOTE: if you had a typo, fix to size=n_rows
 
     amount = np.round(promo_price * quantity + shipping_fee, 2)
     tax_amount = np.round(amount * 0.07, 2)
@@ -332,7 +540,6 @@ def demo_data(n_rows: int = 2000, seed: int = 42) -> pd.DataFrame:
 
     user_note = pd.Series(["great fast" if r<0.2 else "ok" for r in rng.random(n_rows)])
 
-    # targets
     prob = 1/(1+np.exp(-(-1.5 + 0.6*(device=="mobile").astype(int) + 0.4*(promo_used==1).astype(int) - 0.002*base_price)))
     repeat_purchase_30d = (rng.random(n_rows) < prob).astype(int)
     spend_next_30d = np.round(np.clip(prob * rng.normal(180,40,size=n_rows) + (device=="mobile").astype(int)*15, 0, None),2)
@@ -361,8 +568,112 @@ def demo_data(n_rows: int = 2000, seed: int = 42) -> pd.DataFrame:
         "repeat_purchase_30d": repeat_purchase_30d,
         "spend_next_30d": spend_next_30d,
     })
-    # Add a few duplicates
     if n_rows >= 500:
         dup_idx = rng.choice(n_rows, size=int(n_rows*0.01), replace=False)
         df = pd.concat([df, df.iloc[dup_idx]], ignore_index=True)
     return df
+
+# ---- NEW: Summary PDF export ----
+
+def summary_pdf_bytes(df: pd.DataFrame, dataset_name: str = "dataset") -> bytes:
+    """
+    Build a compact PDF of the Summary tab (KPIs, time span, schema snapshot, top correlations, suggestions).
+    Returns raw PDF bytes (ready for st.download_button).
+    """
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.units import cm
+    except Exception as e:
+        raise ImportError(
+            "reportlab is required for PDF export. Install with `pip install reportlab`."
+        ) from e
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=1.6*cm, rightMargin=1.6*cm,
+        topMargin=1.2*cm, bottomMargin=1.2*cm,
+        title=f"{dataset_name} — Summary",
+    )
+
+    styles = getSampleStyleSheet()
+    H1 = styles["Heading1"]; H1.fontSize = 16
+    H2 = styles["Heading2"]; H2.fontSize = 13
+    P  = styles["BodyText"]; P.leading = 14
+
+    flow = []
+    # Title
+    flow.append(Paragraph(f"Summary — {dataset_name}", H1))
+    flow.append(Spacer(1, 6))
+
+    # KPIs
+    ov = overview_stats(df)
+    meta = dataset_meta(df)
+    kpi_data = [
+        ["Rows", f"{ov['rows']:,}", "Cols", f"{ov['cols']}"],
+        ["Missing (%)", f"{ov['missing_pct']:.2f}", "Memory (MB)", f"{ov['memory_mb']:.2f}"],
+        ["Duplicate rows", f"{ov['n_duplicates']:,}", "Profile", meta["profile"]],
+        ["Time start", meta["time_min"] or "—", "Time end", meta["time_max"] or "—"],
+    ]
+    kpi_tbl = Table(kpi_data, hAlign="LEFT", colWidths=[3*cm, 4.5*cm, 3*cm, 6*cm])
+    kpi_tbl.setStyle(TableStyle([
+        ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+        ("FONTSIZE", (0,0), (-1,-1), 9.5),
+        ("INNERGRID", (0,0), (-1,-1), 0.25, colors.grey),
+        ("BOX", (0,0), (-1,-1), 0.25, colors.grey),
+        ("BACKGROUND", (0,0), (-1,0), colors.whitesmoke),
+        ("ALIGN", (0,0), (-1,-1), "LEFT"),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+    ]))
+    flow.append(kpi_tbl)
+    flow.append(Spacer(1, 8))
+
+    # Schema snapshot
+    flow.append(Paragraph("Schema (first 25)", H2))
+    schema = infer_schema(df)
+    snap = schema[["column","type","missing_%","unique"]].head(25)
+    schema_data = [["Column","Type","Missing %","Unique"]] + snap.values.tolist()
+    schema_tbl = Table(schema_data, hAlign="LEFT", colWidths=[6*cm, 3*cm, 2.5*cm, 3*cm])
+    schema_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.whitesmoke),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,-1), 8.8),
+        ("INNERGRID", (0,0), (-1,-1), 0.25, colors.lightgrey),
+        ("BOX", (0,0), (-1,-1), 0.25, colors.lightgrey),
+        ("ALIGN", (2,1), (3,-1), "RIGHT"),
+    ]))
+    flow.append(schema_tbl)
+    flow.append(Spacer(1, 8))
+
+    # Top correlations (if any)
+    corr = numeric_correlations(df, top_k=12, min_abs=0.4)
+    if not corr.empty:
+        flow.append(Paragraph("Top numeric correlations (|r| ≥ 0.4)", H2))
+        corr_data = [["A","B","Corr (r)"]] + [[a,b,f"{r:.2f}"] for a,b,r in corr[["col_a","col_b","corr"]].values]
+        corr_tbl = Table(corr_data, hAlign="LEFT", colWidths=[5*cm,5*cm,3*cm])
+        corr_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.whitesmoke),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE", (0,0), (-1,-1), 8.8),
+            ("INNERGRID", (0,0), (-1,-1), 0.25, colors.lightgrey),
+            ("BOX", (0,0), (-1,-1), 0.25, colors.lightgrey),
+            ("ALIGN", (2,1), (2,-1), "RIGHT"),
+        ]))
+        flow.append(corr_tbl)
+        flow.append(Spacer(1, 8))
+
+    # Suggested actions
+    tips = suggest_actions(df)
+    flow.append(Paragraph("Suggested actions", H2))
+    if tips:
+        for t in tips[:12]:
+            flow.append(Paragraph(f"• {t}", P))
+    else:
+        flow.append(Paragraph("No immediate issues detected.", P))
+
+    doc.build(flow)
+    return buf.getvalue()

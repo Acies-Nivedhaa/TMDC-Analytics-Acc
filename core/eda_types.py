@@ -8,6 +8,7 @@ from pandas.api.types import (
     is_bool_dtype, is_categorical_dtype, is_integer_dtype, is_float_dtype
 )
 from ui.components import section, kpi_row
+from core.summary import nunique_safe
 
 # ---------- sampling helpers ----------
 def _sample(s: pd.Series, n: int = 4000) -> pd.Series:
@@ -72,7 +73,7 @@ def _suggest_for(s: pd.Series) -> tuple[str, str]:
                 f"≈{nr:.0%} values are numeric{' (mostly whole numbers)' if intish else ''}")
 
     # low variety: keep as string but hint encoding later
-    nun = s.nunique(dropna=True)
+    nun = int(nunique_safe(s))
     nonnull = s.notna().sum()
     if nun <= min(50, max(3, int(0.2 * max(1, nonnull)))):
         return "string", f"Low variety ({nun} distinct values) — consider one-hot in Encoding tab"

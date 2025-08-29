@@ -6,7 +6,7 @@ import streamlit as st
 from core.data_io import read_any, read_zip_all
 from core.summary import (
     overview_stats, infer_schema, column_quick_stats,
-    suggest_actions, dataset_meta, demo_data, nunique_safe
+    suggest_actions, dataset_meta, demo_data, nunique_safe, build_summary_pdf,
 )
 from core.eda_overview import render_overview
 from core.eda_combine import render_combine, ensure_unique_name
@@ -22,15 +22,10 @@ from core.preprocess_timeseries import render_preprocess_timeseries
 from core.preprocess_encoding import render_preprocess_encoding
 from core.eda_types import render_eda_types
 from core.final_summary import render_final_summary
-from ui.components import section
-
-
-
-
-
-
 from ui.components import header_bar, kpi_row, section, render_table, control_bar
 
+# NEW: Trino helpers
+from core.trino_connection import TrinoConfig, query_df, q_ident
 
 st.set_page_config(page_title="Analytics Accelerator — Summary", layout="wide")
 
@@ -84,14 +79,8 @@ def dataset_combo(label: str, key_prefix: str):
     return ss.datasets[ss.active_ds]
 
 def render_left_steps():
-    """Vertical pill-style step navigation in the left column."""
-    steps = [
-        ("Summary", "📁"),
-        ("EDA", "📊"),
-        ("Preprocess", "🧹"),
-        ("Final Summary", "✅"),
-    ]
-    eda_badge = f" • {len(st.session_state.get('datasets', {}))}"
+    """Vertical pill-style step navigation in the left column (no emojis/icons)."""
+    nav_labels = ["Summary", "EDA", "Preprocess", "Final Summary"]
 
     st.markdown("""
     <style>
@@ -103,20 +92,17 @@ def render_left_steps():
     </style>
     """, unsafe_allow_html=True)
 
-    current = ss.get("step", "Summary")
-    for label, icon in steps:
-        txt = f"{icon} {label}"
-        if label == "EDA":
-            txt += eda_badge
+    current = st.session_state.get("step", "Summary")
+
+    for label in nav_labels:
         active = (label == current)
         st.markdown(f'<div class="left-pills {"active" if active else ""}">', unsafe_allow_html=True)
-        if st.button(txt, key=f"nav_{label}", use_container_width=True):
+        if st.button(label, key=f"nav_{label}", use_container_width=True):
             if label != current:
-                ss["_step_changed"] = True
-                ss["step"] = label
+                st.session_state["_step_changed"] = True
+                st.session_state["step"] = label
                 st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
-
 
 # ------------- LAYOUT -------------
 left, right = st.columns([0.22, 0.78], gap="large")
@@ -131,7 +117,6 @@ with left:
             st.write("• ", line)
     else:
         st.caption("—")
-
 
 with right:
     # Header + global control bar
@@ -173,123 +158,200 @@ with right:
     # =========================================================
     if ss.step == "Summary":
 
-        # --------- Uploader (multi-file) ---------
+        # --------- Uploader (multi-file) OR DataOS (Trino) ---------
         with section("Select Files"):
             st.caption("Limit ~200MB per file • CSV, XLSX, XLS, JSON/JSONL, PARQUET, ZIP/GZ")
-            col_up, col_demo = st.columns([5, 1])
 
-            with col_up:
-                uploads = st.file_uploader(
-                    "Drag and drop or browse",
-                    type=["csv", "tsv", "txt", "xlsx", "xls", "json", "jsonl", "ndjson", "parquet", "zip", "gz"],
-                    accept_multiple_files=True,
-                    key=f"uploader_{ss.uploader_key}",
-                )
+            # NEW: source switch
+            source = st.radio("Data source", ["Upload files", "DataOS (Trino)"], horizontal=True)
 
-            with col_demo:
-                st.markdown("<div style='height:44px'></div>", unsafe_allow_html=True)
-                if st.button("Use Demo Data", use_container_width=True):
-                    df_demo = demo_data(n_rows=8040)
-                    base = ensure_unique_name(set(ss.datasets.keys()), "demo")
-                    ss.datasets[base] = df_demo
-                    ss.raw_datasets[base] = df_demo.copy()
-                    ss.active_ds = base
-                    ss.df_history.clear()
-                    log(f"Loaded demo into '{base}'.")
+            # ---------------------------
+            # A) Upload files (existing)
+            # ---------------------------
+            if source == "Upload files":
+                col_up, col_demo = st.columns([5, 1])
 
-            # Ingest *new* files only. Never auto-remove based on uploader state.
-            processed_any = False
+                with col_up:
+                    uploads = st.file_uploader(
+                        "Drag and drop or browse",
+                        type=["csv", "tsv", "txt", "xlsx", "xls", "json", "jsonl", "ndjson", "parquet", "zip", "gz"],
+                        accept_multiple_files=True,
+                        key=f"uploader_{ss.uploader_key}",
+                    )
 
-            if uploads:
-                for up in uploads:
-                    content = up.getvalue()
-                    h = hashlib.sha1(content).hexdigest()
-                    if h in ss.loaded_hashes:
-                        continue
+                with col_demo:
+                    st.markdown("<div style='height:44px'></div>", unsafe_allow_html=True)
+                    if st.button("Use Demo Data", use_container_width=True):
+                        df_demo = demo_data(n_rows=8040)
+                        base = ensure_unique_name(set(ss.datasets.keys()), "demo")
+                        ss.datasets[base] = df_demo
+                        ss.raw_datasets[base] = df_demo.copy()
+                        ss.active_ds = base
+                        ss.df_history.clear()
+                        log(f"Loaded demo into '{base}'.")
 
-                    base_name = getattr(up, "name", "uploaded").rsplit("/", 1)[-1]
-                    lower_name = base_name.lower()
+                # Ingest *new* files only. Never auto-remove based on uploader state.
+                processed_any = False
 
-                    # ZIP: ingest ALL supported inner files using same parsers as read_any
-                    if lower_name.endswith(".zip"):
-                        tables = read_zip_all(up)  # list[(inner_filename, df)]
-                        if not tables:
-                            st.warning(f"'{base_name}' contains no supported tabular files.")
+                if uploads:
+                    for up in uploads:
+                        content = up.getvalue()
+                        h = hashlib.sha1(content).hexdigest()
+                        if h in ss.loaded_hashes:
                             continue
 
-                        added = 0
-                        for i, (inner_name, df) in enumerate(tables):
-                            if df is None or df.empty:
+                        base_name = getattr(up, "name", "uploaded").rsplit("/", 1)[-1]
+                        lower_name = base_name.lower()
+
+                        # ZIP: ingest ALL supported inner files using same parsers as read_any
+                        if lower_name.endswith(".zip"):
+                            tables = read_zip_all(up)  # list[(inner_filename, df)]
+                            if not tables:
+                                st.warning(f"'{base_name}' contains no supported tabular files.")
                                 continue
-                            ds_name = ensure_unique_name(set(ss.datasets.keys()), inner_name.rsplit("/", 1)[-1])
+
+                            added = 0
+                            for i, (inner_name, df) in enumerate(tables):
+                                if df is None or df.empty:
+                                    continue
+                                ds_name = ensure_unique_name(set(ss.datasets.keys()), inner_name.rsplit("/", 1)[-1])
+                                ss.datasets[ds_name] = df
+                                ss.raw_datasets[ds_name] = df.copy()
+                                if ss.active_ds is None:
+                                    ss.active_ds = ds_name
+                                meta_key = f"{h}:{i}"  # unique key per inner file
+                                ss.file_meta[meta_key] = {
+                                    "name": ds_name,
+                                    "filename": f"{base_name} › {inner_name}",
+                                }
+                                added += 1
+
+                            if added:
+                                ss.loaded_hashes.add(h)
+                                log(f"Loaded {added} tables from '{base_name}'.")
+                                processed_any = True
+                            continue
+
+                        # Non-zip: single file path
+                        df = read_any(up)
+                        if df is None or df.empty:
+                            st.warning(f"Skipped '{getattr(up, 'name', 'file')}' — no tabular data detected.")
+                            continue
+
+                        name = ensure_unique_name(set(ss.datasets.keys()), base_name)
+                        ss.datasets[name] = df
+                        ss.raw_datasets[name] = df.copy()
+                        ss.active_ds = name
+
+                        ss.loaded_hashes.add(h)
+                        ss.hash_to_name[h] = name
+                        ss.file_meta[h] = {"name": name, "filename": base_name}
+                        log(f"Loaded '{name}'.")
+                        processed_any = True
+
+                    # Clear uploader chip after successful ingest (avoid interfering with step change)
+                    if processed_any:
+                        ss.uploader_key += 1
+                        if not ss.get("_step_changed", False):
+                            st.rerun()
+
+                # --- Files added (per-file removal) ---
+                if ss.file_meta:
+                    st.markdown("**Files added**")
+                    for key, meta in list(ss.file_meta.items()):
+                        ds_name = meta.get("name")
+                        fname = meta.get("filename", ds_name)
+
+                        c1, c2, c3 = st.columns([6, 5, 1])
+                        with c1:
+                            st.write(f"**{fname}**")
+                        with c2:
+                            st.caption(f"Dataset: {ds_name}")
+                        with c3:
+                            if st.button("✖", key=f"rm_{key}", help=f"Remove '{ds_name}' from analysis"):
+                                ss.datasets.pop(ds_name, None)
+                                ss.raw_datasets.pop(ds_name, None)
+                                # Only remove the specific mapping we displayed
+                                ss.file_meta.pop(key, None)
+                                if ss.active_ds == ds_name:
+                                    ss.active_ds = next(iter(ss.datasets.keys()), None)
+                                log(f"Removed dataset '{ds_name}' via file list.")
+                                st.rerun()
+
+
+# ---------------------------
+# B) DataOS (Trino) (NEW) — prompts for ALL fields, no secrets required
+# ---------------------------
+            else:
+                st.caption("Connect and pull a table from DataOS (Trino)")
+
+                c1, c2 = st.columns(2)
+                host = c1.text_input("Host", placeholder="your.trino.host")
+                port = c2.number_input("Port", min_value=1, value=443, step=1)
+
+                user = c1.text_input("Username")
+                password = c2.text_input("Password", type="password")
+
+                http_scheme = c1.selectbox("HTTP scheme", ["https", "http"], index=0)
+                cluster_name = c2.text_input('HTTP header: cluster-name', value="minervac")
+
+                c3, c4 = st.columns(2)
+                catalog = c3.text_input("Catalog", value="icebase")
+                schema  = c4.text_input("Schema",  value="telemetry")
+
+                c5, c6 = st.columns(2)
+                table = c5.text_input("Table", value="device")
+                limit = c6.number_input("Row limit", min_value=1, value=1000, step=100)
+
+                sql = f"SELECT * FROM {q_ident(catalog)}.{q_ident(schema)}.{q_ident(table)} LIMIT {int(limit)}"
+                st.code(sql, language="sql")
+
+                # Basic validation: disable until required fields are filled
+                required_ok = all([host.strip(), user.strip(), password.strip(), catalog.strip(), schema.strip(), table.strip()])
+
+                if st.button("Connect & Fetch", type="primary", disabled=not required_ok):
+                    try:
+                        import trino  # ensure package exists in this venv
+                    except Exception:
+                        st.error("The 'trino' package isn’t installed in this environment. Run: `pip install trino`")
+                    else:
+                        cfg = TrinoConfig(
+                            host=host.strip(),
+                            port=int(port),
+                            user=user.strip(),
+                            password=password,
+                            http_scheme=http_scheme,
+                            http_headers={"cluster-name": cluster_name.strip() or "minervac"},
+                            catalog=catalog.strip(),
+                            schema=schema.strip(),
+                        )
+                        try:
+                            df = query_df(sql, cfg)
+                            # Save as a new dataset like uploads do
+                            base_label = f"{catalog}.{schema}.{table}"
+                            ds_name = ensure_unique_name(set(ss.datasets.keys()), base_label)
                             ss.datasets[ds_name] = df
                             ss.raw_datasets[ds_name] = df.copy()
-                            if ss.active_ds is None:
-                                ss.active_ds = ds_name
-                            meta_key = f"{h}:{i}"  # unique key per inner file
-                            ss.file_meta[meta_key] = {
-                                "name": ds_name,
-                                "filename": f"{base_name} › {inner_name}",
-                            }
-                            added += 1
+                            ss.active_ds = ds_name
+                            # Track in file list with a pseudo key
+                            meta_key = f"trino:{ds_name}"
+                            ss.file_meta[meta_key] = {"name": ds_name, "filename": f"trino › {base_label}"}
+                            log(f"Loaded '{base_label}' from DataOS (Trino) into '{ds_name}'.")
+                            st.success(f"Loaded {len(df):,} rows.")
+                            st.dataframe(df.head(50), use_container_width=True)
+                            st.download_button(
+                                "Download as CSV",
+                                data=df.to_csv(index=False).encode("utf-8"),
+                                file_name=f"{catalog}_{schema}_{table}.csv",
+                                mime="text/csv",
+                            )
+                        except Exception as e:
+                            st.error(f"Query failed: {e}")
 
-                        if added:
-                            ss.loaded_hashes.add(h)
-                            log(f"Loaded {added} tables from '{base_name}'.")
-                            processed_any = True
-                        continue
-
-                    # Non-zip: single file path
-                    df = read_any(up)
-                    if df is None or df.empty:
-                        st.warning(f"Skipped '{getattr(up, 'name', 'file')}' — no tabular data detected.")
-                        continue
-
-                    name = ensure_unique_name(set(ss.datasets.keys()), base_name)
-                    ss.datasets[name] = df
-                    ss.raw_datasets[name] = df.copy()
-                    ss.active_ds = name
-
-                    ss.loaded_hashes.add(h)
-                    ss.hash_to_name[h] = name
-                    ss.file_meta[h] = {"name": name, "filename": base_name}
-                    log(f"Loaded '{name}'.")
-                    processed_any = True
-
-                # Clear uploader chip after successful ingest (avoid interfering with step change)
-                if processed_any:
-                    ss.uploader_key += 1
-                    if not ss.get("_step_changed", False):
-                        st.rerun()
-
-            # --- Files added (per-file removal) ---
-            if ss.file_meta:
-                st.markdown("**Files added**")
-                for key, meta in list(ss.file_meta.items()):
-                    ds_name = meta.get("name")
-                    fname = meta.get("filename", ds_name)
-
-                    c1, c2, c3 = st.columns([6, 5, 1])
-                    with c1:
-                        st.write(f"**{fname}**")
-                    with c2:
-                        st.caption(f"Dataset: {ds_name}")
-                    with c3:
-                        if st.button("✖", key=f"rm_{key}", help=f"Remove '{ds_name}' from analysis"):
-                            ss.datasets.pop(ds_name, None)
-                            ss.raw_datasets.pop(ds_name, None)
-                            # Only remove the specific mapping we displayed
-                            ss.file_meta.pop(key, None)
-                            # Do NOT remove ss.loaded_hashes entry for the whole ZIP;
-                            # this prevents re-ingesting the same archive on rerun.
-                            if ss.active_ds == ds_name:
-                                ss.active_ds = next(iter(ss.datasets.keys()), None)
-                            log(f"Removed dataset '{ds_name}' via file list.")
-                            st.rerun()
 
         # If nothing loaded yet, stop here
         if not ss.datasets:
-            st.info("Upload one or more files or click **Use Demo Data** to begin.")
+            st.info("Upload one or more files or use **DataOS (Trino)** to begin.")
             st.stop()
 
         # --------- Datasets manager (no Delete UI) ---------
@@ -403,6 +465,24 @@ with right:
                 for t in tips:
                     st.markdown(f"- {t}")
 
+        # --- Export: Summary as PDF (end of Summary page) ---
+        st.markdown("---")
+        try:
+            pdf_bytes = build_summary_pdf(
+                active_name=ss.active_ds,
+                df=df,
+                datasets=ss.datasets,   # include all datasets so they appear in the PDF
+            )
+            st.download_button(
+                label="⬇️ Download Summary (PDF)",
+                data=pdf_bytes,
+                file_name=f"{ss.active_ds}_summary.pdf",
+                mime="application/pdf",
+                key=f"download_summary_pdf_{ss.active_ds}"
+            )
+        except ImportError:
+            st.info("Install reportlab to enable PDF export: `pip install reportlab`")
+
     # =========================================================
     # EDA STEP
     # =========================================================
@@ -467,7 +547,6 @@ with right:
     # =========================================================
     # PREPROCESS STEP
     # =========================================================
-
     elif ss.step == "Preprocess":
         if not ss.datasets:
             st.info("Upload one or more files in **Summary** to begin.")
@@ -514,11 +593,5 @@ with right:
             ss.active_ds = names_all[0]
 
         df = ss.datasets[ss.active_ds]
-
-        st.subheader("Final Summary")
         # Outstanding issues + KPIs + compact preview (from core/final_summary.py)
         render_final_summary(df, st.session_state)
-
-
-
-

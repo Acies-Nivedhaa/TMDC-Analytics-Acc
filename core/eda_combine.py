@@ -1,407 +1,149 @@
 # core/eda_combine.py
 from __future__ import annotations
-import streamlit as st
 import pandas as pd
-from typing import Iterable, List, Tuple
-import re
+import streamlit as st
 
-# ---------- Helpers ----------
+from ui.components import section, kpi_row, render_table
 
-def ensure_unique_name(existing: Iterable[str], base: str) -> str:
-    existing = set(existing)
+
+def ensure_unique_name(existing: set[str], base: str) -> str:
+    """Return a dataset name that doesn't collide with existing names."""
     if base not in existing:
         return base
     i = 2
-    while f"{base} ({i})" in existing:
+    while f"{base}_{i}" in existing:
         i += 1
-    return f"{base} ({i})"
-
-def _abbr(name: str, n: int = 8) -> str:
-    """Short, filesystem-safe token from a dataset name."""
-    tok = re.sub(r"[^A-Za-z0-9]+", "", str(name))
-    return tok[:n] if tok else "ds"
-
-def suggest_join_keys(df_left: pd.DataFrame, df_right: pd.DataFrame, max_keys: int = 2) -> List[str]:
-    common = [c for c in df_left.columns if c in df_right.columns]
-    if not common:
-        return []
-    nL, nR = len(df_left), len(df_right)
-    scores = []
-    for c in common:
-        try:
-            uL = df_left[c].nunique(dropna=True)
-        except TypeError:
-            uL = pd.Series(df_left[c].astype(str)).nunique(dropna=True)
-        try:
-            uR = df_right[c].nunique(dropna=True)
-        except TypeError:
-            uR = pd.Series(df_right[c].astype(str)).nunique(dropna=True)
-        score = (uL / max(1, nL)) * (uR / max(1, nR))
-        if any(k in c.lower() for k in ("id", "key", "uuid")):
-            score += 0.25
-        scores.append((score, c))
-    scores.sort(reverse=True)
-    picks = [c for s, c in scores[:max_keys] if s > 0.3]
-    return picks
-
-# core/<where-this-lives>.py
-from typing import List, Tuple
-import pandas as pd
-import pandas.api.types as ptypes
-
-def merge_datasets(
-    left: pd.DataFrame,
-    right: pd.DataFrame,
-    how: str,
-    left_on: List[str],
-    right_on: List[str],
-    suffixes: Tuple[str, str] = ("_x", "_y"),
-) -> pd.DataFrame:
-    """Robust merge:
-    - normalizes inputs to lists
-    - auto-falls back to common column names if lengths differ/are empty
-    - aligns dtypes for each key (datetime -> datetime, else safe string)
-    - never mutates the original DataFrames
-    """
-    # normalize → lists and drop keys not present
-    lkeys = [left_on] if isinstance(left_on, str) else list(left_on or [])
-    rkeys = [right_on] if isinstance(right_on, str) else list(right_on or [])
-    lkeys = [c for c in lkeys if c in left.columns]
-    rkeys = [c for c in rkeys if c in right.columns]
-
-    # auto-match if mismatch/empty
-    if (not lkeys and not rkeys) or (len(lkeys) != len(rkeys)):
-        commons = [c for c in left.columns if c in right.columns]
-        if commons:
-            lkeys = rkeys = commons
-        else:
-            raise ValueError(
-                f"Please select the same number of key columns on both sides. "
-                f"Left keys={lkeys} ({len(lkeys)}), Right keys={rkeys} ({len(rkeys)})."
-            )
-
-    # work on copies, not originals
-    L, R = left.copy(), right.copy()
-
-    # align dtypes for each key pair
-    for lk, rk in zip(lkeys, rkeys):
-        a, b = L[lk], R[rk]
-        if ptypes.is_datetime64_any_dtype(a) or ptypes.is_datetime64_any_dtype(b):
-            L[lk] = pd.to_datetime(a, errors="coerce")
-            R[rk] = pd.to_datetime(b, errors="coerce")
-        elif ptypes.is_numeric_dtype(a) and ptypes.is_numeric_dtype(b):
-            # both numeric -> OK
-            pass
-        else:
-            # safe fallback to string for heterogeneous types
-            L[lk] = a.astype(str)
-            R[rk] = b.astype(str)
-
-    return pd.merge(L, R, how=how, left_on=lkeys, right_on=rkeys, suffixes=suffixes)
+    return f"{base}_{i}"
 
 
-def union_concat(
-    datasets: List[Tuple[str, pd.DataFrame]],
-    mode: str = "union",  # "union" | "intersection"
-    add_source: bool = True,
-) -> pd.DataFrame:
-    if not datasets:
-        return pd.DataFrame()
-    if mode == "intersection":
-        cols = set(datasets[0][1].columns)
-        for _, df in datasets[1:]:
-            cols &= set(df.columns)
-        cols = list(cols)
-        frames = []
-        for name, df in datasets:
-            part = df[cols].copy()
-            if add_source:
-                part["source_dataset"] = name
-            frames.append(part)
-        return pd.concat(frames, ignore_index=True)
-    # union mode
-    frames = []
-    for name, df in datasets:
-        part = df.copy()
-        if add_source:
-            part["source_dataset"] = name
-        frames.append(part)
-    return pd.concat(frames, ignore_index=True, sort=False)
+def _common_cols(df_left: pd.DataFrame, df_right: pd.DataFrame) -> list[str]:
+    return sorted(list(set(df_left.columns) & set(df_right.columns)))
 
-# ---------- UI ----------
 
 def render_combine(ss) -> None:
-    """
-    Join wizard (3 steps) + Append/Union with clearer naming and before/after column counts.
-    """
-    import streamlit as st
-    import pandas as pd
-
-    # ---------- guard ----------
-    if len(ss.datasets) < 2:
-        st.info("Add at least two datasets to perform a join or append.")
+    """EDA ▸ Combine datasets — Join/Merge only (append/union removed)."""
+    if not ss.datasets or len(ss.datasets) < 2:
+        st.info("Add at least two datasets in **Summary** to use Join/Merge.")
         return
 
-    names_all = sorted(ss.datasets.keys())
+    names = sorted(ss.datasets.keys())
+    # Defaults / state
+    ss.setdefault("cmb_left", names[0])
+    ss.setdefault("cmb_right", names[1] if len(names) > 1 else names[0])
+    if ss.cmb_left == ss.cmb_right and len(names) > 1:
+        ss.cmb_right = next(n for n in names if n != ss.cmb_left)
 
-    # ---------- state ----------
-    ss.setdefault("combine_step", 1)
-    ss.setdefault("combine_primary", ss.active_ds if ss.active_ds in names_all else names_all[0])
-    ss.setdefault("combine_secondary",
-                  next((n for n in names_all if n != ss.combine_primary), names_all[0]))
-
-    st.markdown(
-        """
-        <style>
-          .join-box{border:1px solid #e5e7eb;border-radius:12px;padding:14px 18px;text-align:center;background:#fff;}
-          .join-name{font-weight:600;font-size:15px;margin-bottom:6px;}
-          .join-rows{color:#6b7280;font-size:13px;}
-          .join-arrow{font-size:28px; text-align:center; padding-top:24px;}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    def _box(label: str, rows: int, cols: int):
-        st.markdown(
-            f"""<div class="join-box">
-                  <div class="join-name">{label}</div>
-                  <div class="join-rows">{rows:,} rows • {cols:,} cols</div>
-                </div>""",
-            unsafe_allow_html=True,
-        )
-
-    step = int(ss.combine_step)
-    st.markdown(f"**Join Tables – Step {step} of 3**")
-
-    # ---------- STEP 1 ----------
-    if step == 1:
-        st.write("Which tables do you want to combine?")
-
+    with section("Pick datasets", expandable=False):
         c1, c2 = st.columns(2)
         with c1:
-            ss.combine_primary = st.selectbox("Primary table", names_all,
-                                              index=names_all.index(ss.combine_primary),
-                                              key="combine_primary_select")
+            left_name = st.selectbox("Left dataset", names, index=names.index(ss.cmb_left), key="cmb_left")
         with c2:
-            choices = [n for n in names_all if n != ss.combine_primary] or names_all
-            if ss.combine_secondary == ss.combine_primary or ss.combine_secondary not in choices:
-                ss.combine_secondary = choices[0]
-            ss.combine_secondary = st.selectbox("Join with", choices,
-                                                index=choices.index(ss.combine_secondary),
-                                                key="combine_secondary_select")
+            right_options = [n for n in names if n != left_name] or names
+            right_name = st.selectbox("Right dataset", right_options, index=0, key="cmb_right")
 
-        # visual cards with rows+cols
-        left_df = ss.datasets[ss.combine_primary]
-        right_df = ss.datasets[ss.combine_secondary]
-        colA, colArrow, colB = st.columns([1, 0.2, 1])
-        with colA:
-            _box(ss.combine_primary, len(left_df), left_df.shape[1])
-        with colArrow:
-            st.markdown('<div class="join-arrow">➜</div>', unsafe_allow_html=True)
-        with colB:
-            _box(ss.combine_secondary, len(right_df), right_df.shape[1])
+        df_left = ss.datasets[left_name]
+        df_right = ss.datasets[right_name]
 
-        st.caption("Tip: After saving, select the new dataset as **Primary** to join another table.")
+        kpi_row([
+            (f"{left_name} rows", f"{len(df_left):,}"), (f"{left_name} cols", df_left.shape[1]),
+            (f"{right_name} rows", f"{len(df_right):,}"), (f"{right_name} cols", df_right.shape[1]),
+        ])
 
-        if st.button("Next: Choose columns →", key="combine_next1"):
-            ss.combine_step = 2
-            st.rerun()
-        return
+    with section("Join settings", expandable=False):
+        common = _common_cols(df_left, df_right)
+        default_keys = common[:1] if common else []
 
-    # ---------- STEP 2 ----------
-    left_nm, right_nm = ss.combine_primary, ss.combine_secondary
-    left_df, right_df = ss.datasets[left_nm], ss.datasets[right_nm]
-    suggested = suggest_join_keys(left_df, right_df)
+        # Persist user choices
+        ss.setdefault("cmb_join_type", "inner")
+        ss.setdefault("cmb_left_on", default_keys)
+        ss.setdefault("cmb_right_on", default_keys)
+        ss.setdefault("cmb_suffixes_l", "_x")
+        ss.setdefault("cmb_suffixes_r", "_y")
 
-    c_l, c_r = st.columns(2)
-    with c_l:
-        left_keys = st.multiselect(
-            f"Primary key column(s) — {left_nm}",
-            options=left_df.columns.tolist(),
-            default=ss.get("combine_left_keys", suggested),
-            key="combine_left_keys",
-        )
-    with c_r:
-        right_keys = st.multiselect(
-            f"Join key column(s) — {right_nm}",
-            options=right_df.columns.tolist(),
-            default=ss.get("combine_right_keys", suggested),
-            key="combine_right_keys",
-        )
+        ctop1, ctop2, ctop3 = st.columns([1, 1, 1])
+        with ctop1:
+            join_type = st.selectbox(
+                "Join type",
+                ["inner", "left", "right", "outer"],
+                index=["inner", "left", "right", "outer"].index(ss.cmb_join_type),
+                key="cmb_join_type",
+                help="Inner = matching rows only; Left/Right = keep all rows from one side; Outer = keep all rows from both.",
+            )
+        with ctop2:
+            left_on = st.multiselect(
+                f"Keys in '{left_name}'",
+                options=list(df_left.columns),
+                default=ss.cmb_left_on if ss.cmb_left_on else default_keys,
+                key="cmb_left_on",
+            )
+        with ctop3:
+            right_on = st.multiselect(
+                f"Keys in '{right_name}'",
+                options=list(df_right.columns),
+                default=ss.cmb_right_on if ss.cmb_right_on else default_keys,
+                key="cmb_right_on",
+            )
 
-    # flattened (no nested columns)
-    c_how, c_sfx_l, c_sfx_r = st.columns([0.4, 0.3, 0.3])
-    with c_how:
-        how = st.selectbox("Join type", ["inner", "left", "right", "outer"],
-                           index=0, key="combine_join_how")
-    with c_sfx_l:
-        sfx_l = st.text_input("Left suffix", value=ss.get("combine_sfx_l", "_x"), key="combine_sfx_l")
-    with c_sfx_r:
-        sfx_r = st.text_input("Right suffix", value=ss.get("combine_sfx_r", "_y"), key="combine_sfx_r")
+        if len(left_on) != len(right_on):
+            st.warning("Pick the **same number of key columns** on each side.")
+        if not left_on or not right_on:
+            st.info("Select at least one key column on each side to enable preview.")
 
-    valid = bool(left_keys) and len(left_keys) == len(right_keys)
+        csuf1, csuf2 = st.columns(2)
+        with csuf1:
+            sfx_l = st.text_input("Suffix for left duplicates", value=ss.cmb_suffixes_l, key="cmb_suffixes_l")
+        with csuf2:
+            sfx_r = st.text_input("Suffix for right duplicates", value=ss.cmb_suffixes_r, key="cmb_suffixes_r")
 
-    # quick preview: shape and column counts before/after
-    before_cols_l = left_df.shape[1]
-    before_cols_r = right_df.shape[1]
-    if valid:
+    def _merge_preview() -> tuple[pd.DataFrame | None, str | None]:
+        if not left_on or not right_on:
+            return None, "Select join keys on both sides."
+        if len(left_on) != len(right_on):
+            return None, "The number of keys must match (left vs right)."
         try:
-            prev = merge_datasets(
-                left_df, right_df, how=how,
-                left_on=left_keys, right_on=right_keys,
-                suffixes=(sfx_l, sfx_r)
+            out = pd.merge(
+                df_left, df_right,
+                how=join_type,
+                left_on=left_on, right_on=right_on,
+                suffixes=(sfx_l, sfx_r),
             )
-            st.caption(
-                f"Preview: **{left_nm}** {before_cols_l:,} cols + **{right_nm}** {before_cols_r:,} cols "
-                f"→ result **{prev.shape[1]:,} cols**, **{prev.shape[0]:,} rows**"
-            )
+            return out, None
         except Exception as e:
-            st.error(f"Join preview failed: {e}")
-    else:
-        st.warning("Select the same number of key columns on both sides.")
+            return None, f"Merge failed: {e}"
 
-    c_back, c_next = st.columns([0.25, 0.75])
-    with c_back:
-        if st.button("← Back", key="combine_back2"):
-            ss.combine_step = 1
-            st.rerun()
-    with c_next:
-        if valid and st.button("Next: Preview & save →", key="combine_next2"):
-            ss.combine_step = 3
-            st.rerun()
-    if step == 2:
-        return
+    with section("Preview & save", expandable=False):
+        cprev, csave = st.columns([1, 1])
+        merged = None
+        with cprev:
+            if st.button("Preview join", key="cmb_preview"):
+                merged, err = _merge_preview()
+                if err:
+                    st.error(err)
+                elif merged is None or merged.empty:
+                    st.warning("Join produced no rows.")
+                else:
+                    st.caption(f"Result: **{merged.shape[0]:,} × {merged.shape[1]:,}**")
+                    st.dataframe(merged.head(50), use_container_width=True)
+        with csave:
+            new_base = f"join_{left_name}_{right_name}"
+            new_name = st.text_input("Save as (dataset name)", value=new_base, key="cmb_new_name")
+            if st.button("Save dataset", type="primary", key="cmb_save"):
+                merged, err = _merge_preview()
+                if err:
+                    st.error(err)
+                elif merged is None:
+                    st.warning("Nothing to save — please preview first.")
+                else:
+                    safe_name = ensure_unique_name(set(ss.datasets.keys()), new_name.strip() or new_base)
+                    # Push into datasets; also store as "raw" for consistency
+                    ss.datasets[safe_name] = merged
+                    ss.raw_datasets[safe_name] = merged.copy()
+                    ss.active_ds = safe_name
+                    st.success(f"Saved merged dataset as **{safe_name}**.")
+                    st.rerun()
 
-    # ---------- STEP 3 ----------
-    left_keys = ss.combine_left_keys
-    right_keys = ss.combine_right_keys
-    how, sfx_l, sfx_r = ss.combine_join_how, ss.combine_sfx_l, ss.combine_sfx_r
-
-    merged = merge_datasets(
-        left_df, right_df, how=how,
-        left_on=left_keys, right_on=right_keys,
-        suffixes=(sfx_l, sfx_r)
-    )
-    st.write("**Preview**")
-    st.write(
-        f"Result: **{merged.shape[0]:,} rows × {merged.shape[1]:,} cols** "
-        f"from **{left_nm}** ({len(left_df):,}×{before_cols_l:,}) and "
-        f"**{right_nm}** ({len(right_df):,}×{before_cols_r:,})."
-    )
-    st.dataframe(merged.head(20), use_container_width=True)
-
-    # short, friendly default name
-    base_short = f"{_abbr(left_nm)}_{_abbr(right_nm)}_{how[0].lower()}"  # e.g. ord_cust_i
-    save_name = st.text_input(
-        "Save as dataset name",
-        value=ensure_unique_name(set(ss.datasets.keys()), base_short),
-        key="combine_save_name"
-    )
-    c_back3, c_save = st.columns([0.25, 0.75])
-    with c_back3:
-        if st.button("← Back", key="combine_back3"):
-            ss.combine_step = 2
-            st.rerun()
-    with c_save:
-        if st.button("Save dataset", key="combine_apply"):
-            try:
-                merged = merge_datasets(
-                    left_df, right_df, how=how,
-                    left_on=left_keys, right_on=right_keys,
-                    suffixes=(sfx_l, sfx_r),
-                )
-            except Exception as e:
-                st.error(f"Join failed: {e}")
-                st.stop()
-
-            ss.datasets[save_name] = merged
-            ss.raw_datasets[save_name] = merged.copy()
-            ss.active_ds = save_name
-            ss.df_history.clear()
-            ss.combine_step = 1
-            st.success(f"Saved as **{save_name}**")
-            st.rerun()
-
-
-    # ---------- Append / Union ----------
-    st.markdown("---")
-    st.markdown("#### Append / Union")
-
-    picks = st.multiselect(
-        "Datasets to append",
-        names_all,
-        default=[ss.active_ds] if ss.active_ds else [],
-        key="eda_union_picks",
-    )
-    mode = st.selectbox(
-        "Column alignment",
-        ["Union (all columns)", "Intersection (common columns)"],
-        key="eda_union_mode",
-    )
-    add_src = st.checkbox("Add source_dataset column", value=True, key="eda_union_addsrc")
-
-    if len(picks) >= 2:
-        # --- live before/after counts ---
-        rows_before = {nm: len(ss.datasets[nm]) for nm in picks}
-        colsets = {nm: set(ss.datasets[nm].columns) for nm in picks}
-
-        if mode.startswith("Union"):
-            cols_after = len(set().union(*colsets.values()))
-        else:
-            cols_after = len(set.intersection(*colsets.values()))
-
-        rows_after = sum(rows_before.values())
-
-        st.caption(
-            "Rows before: " + ", ".join([f"**{nm}** {r:,}" for nm, r in rows_before.items()]) +
-            f" → result **{rows_after:,} rows**"
+    with section("Notes", expandable=True):
+        st.markdown(
+            "- Use matching key columns (e.g., `order_id`, `customer_id`, or a composite of multiple fields).\n"
+            "- If both tables have a non-key column with the same name, suffixes (e.g., `_x`, `_y`) will be added."
         )
-        st.caption(
-            "Cols before: " + ", ".join([f"**{nm}** {len(colsets[nm]):,}" for nm in picks]) +
-            f" → result **{cols_after:,} cols**"
-        )
-
-        # --- lightweight preview (samples a few rows per dataset) ---
-        if st.button("Preview append", key="eda_preview_append"):
-            per_ds = 10  # small, just for a peek
-            combo_small = []
-            for nm in picks:
-                df = ss.datasets[nm]
-                take = df.sample(min(per_ds, len(df)), random_state=0) if len(df) > per_ds else df
-                combo_small.append((nm, take))
-
-            prev = union_concat(
-                combo_small,
-                mode="union" if mode.startswith("Union") else "intersection",
-                add_source=add_src,
-            )
-            st.write(
-                f"Preview shape: {prev.shape[0]:,} rows × {prev.shape[1]:,} cols "
-                f"(full result would be **{rows_after:,} × {cols_after:,}**)"
-            )
-            st.dataframe(prev.head(20), use_container_width=True)
-
-    if len(picks) >= 2 and st.button("Apply append", key="eda_apply_append"):
-        combo = [(nm, ss.datasets[nm]) for nm in picks]
-        out = union_concat(
-            combo,
-            mode="union" if mode.startswith("Union") else "intersection",
-            add_source=add_src,
-        )
-        # short, friendly name (keeps your earlier short-name helper)
-        short_tokens = [_abbr(nm) for nm in picks[:3]]
-        base_app = "app_" + "_".join(short_tokens)
-        if len(picks) > 3:
-            base_app += f"+{len(picks)-3}"
-        new_name = ensure_unique_name(set(ss.datasets.keys()), base_app)
-
-        ss.datasets[new_name] = out
-        ss.raw_datasets[new_name] = out.copy()
-        ss.active_ds = new_name
-        ss.df_history.clear()
-        st.success(f"Saved as **{new_name}**")
-        st.rerun()
-
-
-

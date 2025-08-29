@@ -8,6 +8,9 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from wordcloud import WordCloud, STOPWORDS
+import matplotlib.pyplot as plt
+
 from ui.components import section, render_table
 
 # -------- small, dependency-light helpers --------
@@ -198,7 +201,24 @@ def render_preprocess_text(ss) -> None:
     with section("Word cloud & custom stoplist", expandable=False):
         # sliders
         total_rows = len(df)
-        sample_n = st.slider("Rows for word cloud (sampled for speed)", min_value=200, max_value=min(7074, total_rows), value=min(5000, total_rows), key="ppt_wc_rows")
+        # Robust slider for small datasets
+        max_rows = int(max(1, min(7074, total_rows)))  # upper cap and at least 1
+        min_rows = 1
+        default_rows = int(min(5000, max_rows))
+
+        if max_rows <= min_rows:
+            # Not enough data to show a range — just use what's available
+            sample_n = max_rows
+            st.caption(f"Using {sample_n} row(s) for word cloud (dataset is small).")
+        else:
+            sample_n = st.slider(
+                "Rows for word cloud (sampled for speed)",
+                min_value=min_rows,
+                max_value=max_rows,
+                value=default_rows,
+                key="ppt_wc_rows",
+            )
+
         top_n     = st.slider("Show top N words", min_value=10, max_value=200, value=100, key="ppt_wc_topn")
 
         sample_wc = df[c_col].sample(sample_n, random_state=7) if sample_n < total_rows else df[c_col]
