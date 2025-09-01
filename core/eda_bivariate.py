@@ -2,26 +2,47 @@
 from __future__ import annotations
 
 import math
+import json as _json
 import numpy as np
 import pandas as pd
 import pandas.api.types as ptypes
 import streamlit as st
 
-
 # -------------------- small utils --------------------
+
+def _make_hashable(x):
+    """Convert unhashable nested objects (list/dict/set) into stable, hashable labels."""
+    try:
+        hash(x)
+        return x
+    except TypeError:
+        try:
+            if isinstance(x, dict):
+                return tuple(sorted((k, _make_hashable(v)) for k, v in x.items()))
+            if isinstance(x, (list, tuple, set)):
+                return tuple(_make_hashable(v) for v in x)
+            # Fallback to a stable, deterministic string
+            return _json.dumps(x, sort_keys=True, default=str)
+        except Exception:
+            return str(x)
 
 def _as_numeric(s: pd.Series) -> pd.Series:
     return pd.to_numeric(s, errors="coerce")
 
 def _as_category(s: pd.Series) -> pd.Series:
+    """Cast to category, handling unhashable cells safely."""
     if ptypes.is_categorical_dtype(s):
         return s
-    return s.astype("category")
+    try:
+        return s.astype("category")
+    except Exception:
+        # Robust path: map unhashables -> stable hashable labels, then cast
+        return s.map(_make_hashable).astype("category")
 
 def _is_binary(s: pd.Series) -> bool:
-    # binary after dropping NaNs and casting to category
-    vals = pd.Series(s).dropna().astype("category").cat.categories
-    return len(vals) == 2
+    # binary after dropping NaNs and casting to category (robust to unhashables)
+    cats = _as_category(pd.Series(s)).dropna().astype("category").cat.categories
+    return len(cats) == 2
 
 def _co_dropna(x: pd.Series, y: pd.Series) -> tuple[pd.Series, pd.Series]:
     m = ~(x.isna() | y.isna())
@@ -32,8 +53,8 @@ def _discretize_numeric(s: pd.Series, q: int = 10) -> pd.Series:
     try:
         return pd.qcut(s, q=min(q, s.nunique(dropna=True)), duplicates="drop")
     except Exception:
-        # if qcut fails (few uniques), fall back to category on value
-        return s.astype("category")
+        # if qcut fails (few uniques), fall back to safe categorical
+        return _as_category(s)
 
 def _entropy(p: np.ndarray) -> float:
     p = p[p > 0]
@@ -46,7 +67,6 @@ def pearson_r(x: pd.Series, y: pd.Series) -> float:
     return float(x.corr(y, method="pearson"))
 
 def spearman_rho(x: pd.Series, y: pd.Series) -> float:
-    # ranks then Pearson, works without SciPy
     x, y = _co_dropna(_as_numeric(x), _as_numeric(y))
     return float(x.corr(y, method="spearman"))
 
@@ -188,7 +208,6 @@ def compute_association(x: pd.Series, y: pd.Series, method: str = "Auto") -> tup
 # -------------------- UI --------------------
 
 def render_bivariate(df: pd.DataFrame, sample_n: int | None = None) -> None:
-    import streamlit as st
     st.markdown("**Bivariate**")
 
     cols = df.columns.tolist()

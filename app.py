@@ -6,7 +6,8 @@ import streamlit as st
 from core.data_io import read_any, read_zip_all
 from core.summary import (
     overview_stats, infer_schema, column_quick_stats,
-    suggest_actions, dataset_meta, demo_data, nunique_safe, build_summary_pdf,
+    suggest_actions, dataset_meta, demo_data, nunique_safe,
+    build_summary_html, summary_html_bytes,   # <-- HTML only
 )
 from core.eda_overview import render_overview
 from core.eda_combine import render_combine, ensure_unique_name
@@ -246,7 +247,7 @@ with right:
                         ss.loaded_hashes.add(h)
                         ss.hash_to_name[h] = name
                         ss.file_meta[h] = {"name": name, "filename": base_name}
-                        log(f"Loaded '{name}'.")
+                        log(f"Loaded '{name}' .")
                         processed_any = True
 
                     # Clear uploader chip after successful ingest (avoid interfering with step change)
@@ -278,10 +279,9 @@ with right:
                                 log(f"Removed dataset '{ds_name}' via file list.")
                                 st.rerun()
 
-
-# ---------------------------
-# B) DataOS (Trino) (NEW) — prompts for ALL fields, no secrets required
-# ---------------------------
+            # ---------------------------
+            # B) DataOS (Trino) (NEW)
+            # ---------------------------
             else:
                 st.caption("Connect and pull a table from DataOS (Trino)")
 
@@ -347,7 +347,6 @@ with right:
                             )
                         except Exception as e:
                             st.error(f"Query failed: {e}")
-
 
         # If nothing loaded yet, stop here
         if not ss.datasets:
@@ -465,23 +464,30 @@ with right:
                 for t in tips:
                     st.markdown(f"- {t}")
 
-        # --- Export: Summary as PDF (end of Summary page) ---
+        # --- Export: Scrollable HTML report (inline + download) ---
         st.markdown("---")
-        try:
-            pdf_bytes = build_summary_pdf(
-                active_name=ss.active_ds,
-                df=df,
-                datasets=ss.datasets,   # include all datasets so they appear in the PDF
+        with section("Scrollable report (HTML)", expandable=False):
+            html = build_summary_html(
+                ss.active_ds,
+                df,
+                datasets=ss.datasets
             )
+            # show inline (fully scrollable, sticky headers handled in HTML)
+            st.components.v1.html(html, height=900, scrolling=True)
+
+            # download same HTML
             st.download_button(
-                label="⬇️ Download Summary (PDF)",
-                data=pdf_bytes,
-                file_name=f"{ss.active_ds}_summary.pdf",
-                mime="application/pdf",
-                key=f"download_summary_pdf_{ss.active_ds}"
+                "⬇️ Download Summary (HTML)",
+                data=summary_html_bytes(
+                    df,
+                    dataset_name=ss.active_ds,
+                    datasets=ss.datasets
+                ),
+                file_name=f"{ss.active_ds}_summary.html",
+                mime="text/html",
+                type="primary",
+                key=f"download_summary_html_{ss.active_ds}"
             )
-        except ImportError:
-            st.info("Install reportlab to enable PDF export: `pip install reportlab`")
 
     # =========================================================
     # EDA STEP
