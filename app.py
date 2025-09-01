@@ -7,8 +7,9 @@ from core.data_io import read_any, read_zip_all
 from core.summary import (
     overview_stats, infer_schema, column_quick_stats,
     suggest_actions, dataset_meta, demo_data, nunique_safe,
-    build_summary_html, summary_html_bytes,   # <-- HTML only
+    build_summary_pdf, build_summary_html, summary_html_bytes
 )
+
 from core.eda_overview import render_overview
 from core.eda_combine import render_combine, ensure_unique_name
 from core.eda_missingness import render_missingness

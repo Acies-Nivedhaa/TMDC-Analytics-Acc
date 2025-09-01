@@ -7,13 +7,12 @@ from typing import Dict, List
 import json as _json
 from io import BytesIO
 
-# Optional ReportLab presence probe (app still runs without it; only export needs it)
+# ReportLab is optional: only needed for PDF export
 try:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, LongTable
-    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, LongTable, TableStyle
     _REPORTLAB_OK = True
 except Exception:
     _REPORTLAB_OK = False
@@ -36,9 +35,10 @@ __all__ = [
     "summary_html_bytes",
 ]
 
-# ---------------------------------------------------------------------------
-# High-level KPIs
-# ---------------------------------------------------------------------------
+
+# =========================
+# KPI / Stats
+# =========================
 
 def overview_stats(df: pd.DataFrame) -> Dict[str, float]:
     n_rows, n_cols = df.shape
@@ -55,9 +55,10 @@ def overview_stats(df: pd.DataFrame) -> Dict[str, float]:
         "n_duplicates": n_dup,
     }
 
-# ---------------------------------------------------------------------------
-# PDF helpers (flow-safe, pagination-safe)
-# ---------------------------------------------------------------------------
+
+# =========================
+# PDF helpers
+# =========================
 
 def _longtables_from_df(
     df_in: pd.DataFrame,
@@ -65,14 +66,8 @@ def _longtables_from_df(
     styles,
     max_cols: int = 8
 ) -> list:
-    """
-    Create a list of flowables for a DataFrame that:
-      - paginate vertically (LongTable with header repetition),
-      - split horizontally into chunks of up to `max_cols` columns.
-    """
-    from reportlab.platypus import Paragraph, Spacer, TableStyle
-    from reportlab.lib import colors
-
+    """Paginate vertically and split wide frames horizontally to avoid truncation."""
+    from reportlab.platypus import Paragraph, Spacer
     flow = []
     if df_in is None or df_in.empty:
         return flow
@@ -86,7 +81,6 @@ def _longtables_from_df(
         part_label = f" (part {i+1})" if parts > 1 else ""
         flow.append(Paragraph(f"{title}{part_label}", styles["Heading3"]))
 
-        # Convert to str to avoid reportlab type surprises
         data = [list(sub.columns)] + sub.astype(str).values.tolist()
         tbl = LongTable(
             data,
@@ -103,16 +97,19 @@ def _longtables_from_df(
         flow += [tbl, Spacer(1, 8)]
     return flow
 
-# ---------------------------------------------------------------------------
-# HTML (scrollable) report helpers
-# ---------------------------------------------------------------------------
+
+# =========================
+# HTML helpers (scrollable)
+# =========================
 
 def _html_table(df_in: pd.DataFrame, *, max_height_px: int | None = 420, caption: str | None = None) -> str:
-    """Return a scrollable HTML table (sticky header) wrapped in a box."""
+    """
+    Scrollable (both directions) HTML table with sticky header.
+    - Horizontal scroll: table uses width:max-content and sits inside an overflow:auto container.
+    """
     if df_in is None or df_in.empty:
         return "<div class='empty'>No data</div>"
 
-    # Ensure strings for display and a clean NA marker
     html_tbl = df_in.to_html(
         index=False,
         border=0,
@@ -122,33 +119,33 @@ def _html_table(df_in: pd.DataFrame, *, max_height_px: int | None = 420, caption
     )
 
     cap = f"<div class='cap'>{caption}</div>" if caption else ""
-    style_scroll = f"max-height:{max_height_px}px; overflow:auto;" if max_height_px else "overflow:auto;"
+    mh = f"max-height:{max_height_px}px;" if max_height_px else ""
     return f"""
     <div class='box'>
       {cap}
-      <div class='scroll' style="{style_scroll}">
-        {html_tbl}
+      <div class='scroll' style="{mh} overflow:auto;">
+        <div class='scroll-inner'>
+          {html_tbl}
+        </div>
       </div>
     </div>
     """
 
-# ---------------------------------------------------------------------------
-# Summary HTML (scrollable) — returns str
-# ---------------------------------------------------------------------------
+
+# =========================
+# HTML Summary (returns str)
+# =========================
 
 def build_summary_html(
     active_name: str,
     df: pd.DataFrame,
     datasets: dict[str, pd.DataFrame] | None = None,
 ) -> str:
-    """
-    Build a single, self-contained HTML report for the Summary tab.
-    Everything is scrollable with sticky headers (no truncation).
-    """
+    """Self-contained HTML report with vertical & horizontal scrolling (no truncation)."""
     ov = overview_stats(df)
     meta = dataset_meta(df)
 
-    # Datasets loaded in session
+    # Datasets in session
     datasets_df = None
     if datasets:
         rows = []
@@ -163,9 +160,9 @@ def build_summary_html(
             })
         datasets_df = pd.DataFrame(rows) if rows else None
 
-    # Schema & derived frames
+    # Core frames
     schema_tbl = pd.DataFrame({"column": df.columns, "dtype": [str(t) for t in df.dtypes]})
-    preview_df = df.head(20).iloc[:, :10]  # match UI: first 20 rows, first 10 cols
+    preview_df = df.head(20)  # ALL columns; only rows limited to 20
     schema_local = infer_schema(df)
     nunique_tbl = (
         schema_local[["column", "unique"]]
@@ -174,13 +171,12 @@ def build_summary_html(
         .reset_index(drop=True)
     )
     col_stats_tbl = column_quick_stats(df, schema_local)
-    # reorder for readability
     show_cols = [c for c in ["column","type","min","p50","max","mean","std","unique","top","true","false"] if c in col_stats_tbl.columns]
     if show_cols:
         col_stats_tbl = col_stats_tbl[show_cols]
     tips = suggest_actions(df)
 
-    # Sections as HTML
+    # Sections
     kpi_html = f"""
       <div class="kpi-grid">
         <div class="kpi"><div class="kpi-label">Rows</div><div class="kpi-value">{ov['rows']:,}</div></div>
@@ -196,7 +192,7 @@ def build_summary_html(
 
     datasets_html = _html_table(datasets_df, caption="Datasets in session", max_height_px=260) if (datasets_df is not None and not datasets_df.empty) else ""
     schema_html   = _html_table(schema_tbl.rename(columns={"column":"Column","dtype":"Dtype"}), caption="Schema (all columns)", max_height_px=360)
-    preview_html  = _html_table(preview_df, caption="Preview (first 20 rows, first 10 columns)", max_height_px=280)
+    preview_html  = _html_table(preview_df, caption="Preview (first 20 rows — all columns)", max_height_px=280)
     card_html     = _html_table(nunique_tbl.rename(columns={"column":"Column","nunique":"Unique"}), caption="Cardinality (nunique per column)", max_height_px=360)
     stats_html    = _html_table(col_stats_tbl.rename(columns={
         "column":"Column","type":"Type","min":"Min","p50":"P50","max":"Max","mean":"Mean","std":"Std","unique":"Unique","top":"Top","true":"True","false":"False"
@@ -207,7 +203,7 @@ def build_summary_html(
         if tips else "<div class='muted'>No immediate issues detected.</div>"
     )
 
-    # Full, self-contained HTML (no external deps)
+    # Full HTML
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -228,28 +224,38 @@ def build_summary_html(
   .muted {{ color: var(--muted); }}
   .cap {{ font-size: 12px; color: var(--muted); margin: 4px 0 6px 0; }}
   .box {{ margin: 6px 0 12px 0; }}
+
+  /* Scroll container: both axes */
   .scroll {{
     border: 1px solid var(--line); border-radius: 10px;
     background: #fff; overflow: auto; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.02);
   }}
+  /* Make inner width expand to content so horizontal scroll can happen */
+  .scroll-inner {{ width: max-content; min-width: 100%; }}
+
+  /* Table styling */
   table.grid {{
-    border-collapse: collapse; width: 100%;
+    border-collapse: collapse;
+    table-layout: auto;
+    width: max-content;   /* key for horizontal scroll */
+    min-width: 100%;      /* but don't be smaller than container */
   }}
   table.grid thead th {{
     position: sticky; top: 0; z-index: 2;
     background: var(--soft); border-bottom: 1px solid var(--line);
-    text-align: left; padding: 8px; font-weight: 600; font-size: 12px; white-space: nowrap;
+    text-align: left; padding: 8px; font-weight: 600; font-size: 12px;
+    white-space: nowrap;
   }}
   table.grid td {{
     border-bottom: 1px solid #f1f5f9; padding: 6px 8px; font-size: 12px; vertical-align: top;
+    white-space: nowrap;   /* keep cells on one line to enable L↔R scroll */
   }}
+
   .kpi-grid {{
     display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 10px; margin: 8px 0 12px 0;
   }}
-  .kpi {{
-    border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff;
-  }}
+  .kpi {{ border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; }}
   .kpi-label {{ font-size: 11px; color: var(--muted); margin-bottom: 4px; }}
   .kpi-value {{ font-size: 16px; font-weight: 600; }}
   ul.tips {{ margin: 6px 0 0 18px; padding: 0; }}
@@ -300,6 +306,7 @@ def build_summary_html(
 """
     return html
 
+
 def summary_html_bytes(
     df: pd.DataFrame,
     dataset_name: str = "dataset",
@@ -307,31 +314,25 @@ def summary_html_bytes(
     datasets: dict[str, pd.DataFrame] | None = None,
 ) -> bytes:
     """Return the same HTML as bytes for a download button."""
-    html = build_summary_html(dataset_name, df, datasets=datasets)
-    return html.encode("utf-8")
+    return build_summary_html(dataset_name, df, datasets=datasets).encode("utf-8")
 
-# ---------------------------------------------------------------------------
-# Summary PDF (full, scroll-safe)
-# ---------------------------------------------------------------------------
+
+# =========================
+# PDF Summary
+# =========================
 
 def build_summary_pdf(
     active_name: str,
     df: pd.DataFrame,
     datasets: dict[str, pd.DataFrame] | None = None,
 ) -> bytes:
-    """
-    Build a PDF mirroring the Summary tab, avoiding scroll truncation via
-    LongTable + horizontal column chunking.
-    """
-    try:
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    except Exception as e:
-        raise ImportError(
-            "ReportLab is required for PDF export. Install with: pip install reportlab"
-        ) from e
+    """PDF version – uses LongTable + horizontal chunking."""
+    if not _REPORTLAB_OK:
+        raise ImportError("ReportLab is required for PDF export. Install with: pip install reportlab")
 
-    # styles
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import Paragraph, Spacer
+
     styles = getSampleStyleSheet()
     h1 = styles["Heading1"]
     h2 = styles["Heading2"]
@@ -339,11 +340,10 @@ def build_summary_pdf(
     body = styles["BodyText"]
     small = ParagraphStyle("small", parent=body, fontSize=9, leading=11)
 
-    # compute Summary content
     ov = overview_stats(df)
     meta = dataset_meta(df)
 
-    # Datasets overview table
+    # Datasets overview
     datasets_df = None
     if datasets:
         rows = []
@@ -361,7 +361,7 @@ def build_summary_pdf(
 
     # Derived frames
     schema_tbl = pd.DataFrame({"column": df.columns, "dtype": [str(t) for t in df.dtypes]})
-    preview_df = df.head(20)  # UI parity
+    preview_df = df.head(20)  # UI parity (all columns, 20 rows)
     schema_local = infer_schema(df)
     nunique_tbl = (
         schema_local[["column", "unique"]]
@@ -372,7 +372,6 @@ def build_summary_pdf(
     col_stats_tbl = column_quick_stats(df, schema_local)
     tips = suggest_actions(df)
 
-    # Document assembly
     buff = BytesIO()
     doc = SimpleDocTemplate(
         buff, pagesize=A4,
@@ -380,18 +379,15 @@ def build_summary_pdf(
     )
     story = []
 
-    # Title
     story.append(Paragraph(f"Summary — {active_name}", h1))
     story.append(Spacer(1, 6))
     story.append(Paragraph("Analytics Accelerator", small))
     story.append(Spacer(1, 12))
 
-    # Datasets overview
     if datasets_df is not None and not datasets_df.empty:
         story.append(Paragraph("Datasets (loaded in session)", h2))
         story += _longtables_from_df(datasets_df, "Loaded datasets", styles, max_cols=6)
 
-    # KPIs (rendered as a single line paragraph to avoid layout edge cases)
     story.append(Paragraph("Active Dataset — KPIs", h2))
     kpi_line = (
         f"<b>Rows:</b> {ov['rows']:,} &nbsp;&nbsp; "
@@ -403,7 +399,6 @@ def build_summary_pdf(
     story.append(Paragraph(kpi_line, small))
     story.append(Spacer(1, 8))
 
-    # Meta / profile
     story.append(Paragraph("Profile & Time Span", h3))
     meta_text = (
         f"<b>Profile:</b> {meta['profile']} &nbsp;&nbsp; "
@@ -414,20 +409,16 @@ def build_summary_pdf(
     story.append(Paragraph(meta_text, small))
     story.append(Spacer(1, 10))
 
-    # Schema (all)
     story.append(Paragraph("Schema (column → dtype)", h2))
     story += _longtables_from_df(schema_tbl, "Schema", styles, max_cols=8)
 
-    # Preview (first 20)
     if not preview_df.empty:
         story.append(Paragraph("Preview (first 20 rows)", h2))
         story += _longtables_from_df(preview_df, "Preview", styles, max_cols=8)
 
-    # Cardinality
     story.append(Paragraph("Cardinality (nunique per column)", h2))
     story += _longtables_from_df(nunique_tbl, "Cardinality", styles, max_cols=8)
 
-    # Column quick stats
     if not col_stats_tbl.empty:
         show_cols = []
         for c in ["column", "type", "min", "p50", "max", "mean", "std", "unique", "top", "true", "false"]:
@@ -437,7 +428,6 @@ def build_summary_pdf(
         story.append(Paragraph("Schema & Column Summary", h2))
         story += _longtables_from_df(stats_clean, "Column summary", styles, max_cols=8)
 
-    # Suggested actions
     story.append(Paragraph("Suggested Actions", h2))
     if tips:
         for t in tips:
@@ -448,6 +438,7 @@ def build_summary_pdf(
     doc.build(story)
     return buff.getvalue()
 
+
 def summary_pdf_bytes(
     df: pd.DataFrame,
     dataset_name: str = "dataset",
@@ -456,9 +447,10 @@ def summary_pdf_bytes(
     """Backward-compatible wrapper around `build_summary_pdf(...)`."""
     return build_summary_pdf(active_name=dataset_name, df=df, datasets=datasets)
 
-# ---------------------------------------------------------------------------
+
+# =========================
 # Inference utilities
-# ---------------------------------------------------------------------------
+# =========================
 
 def _is_bool_series(s: pd.Series) -> bool:
     try:
@@ -472,6 +464,7 @@ def _is_bool_series(s: pd.Series) -> bool:
     except Exception:
         pass
     return False
+
 
 def _looks_like_datetime(s: pd.Series) -> bool:
     try:
@@ -489,6 +482,7 @@ def _looks_like_datetime(s: pd.Series) -> bool:
     except Exception:
         return False
     return False
+
 
 def infer_schema(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -526,6 +520,7 @@ def infer_schema(df: pd.DataFrame) -> pd.DataFrame:
             "example": sample_val,
         })
     return pd.DataFrame(rows)
+
 
 def column_quick_stats(df: pd.DataFrame, schema: pd.DataFrame | None = None) -> pd.DataFrame:
     if schema is None:
@@ -567,6 +562,7 @@ def column_quick_stats(df: pd.DataFrame, schema: pd.DataFrame | None = None) -> 
         out.append(rec)
     return pd.DataFrame(out)
 
+
 def numeric_correlations(df: pd.DataFrame, top_k: int = 20, min_abs: float = 0.4) -> pd.DataFrame:
     num_df = df.select_dtypes(include=[np.number]).copy()
     if num_df.shape[1] < 2:
@@ -581,6 +577,7 @@ def numeric_correlations(df: pd.DataFrame, top_k: int = 20, min_abs: float = 0.4
                 pairs.append({"col_a": cols[i], "col_b": cols[j], "corr": float(val)})
     pairs.sort(key=lambda x: -abs(x["corr"]))
     return pd.DataFrame(pairs[:top_k])
+
 
 def suggest_actions(df: pd.DataFrame) -> List[str]:
     tips: List[str] = []
@@ -623,6 +620,7 @@ def suggest_actions(df: pd.DataFrame) -> List[str]:
             if parsed.notna().mean() > 0.9:
                 tips.append(f"'{r['column']}' looks like a date/time stored as text — parse to datetime.")
     return tips
+
 
 def dataset_meta(df: pd.DataFrame) -> Dict[str, str | int]:
     schema = infer_schema(df)
@@ -667,9 +665,10 @@ def dataset_meta(df: pd.DataFrame) -> Dict[str, str | int]:
         "profile": profile,
     }
 
-# ---------------------------------------------------------------------------
-# Helpers for unhashable / nested types
-# ---------------------------------------------------------------------------
+
+# =========================
+# Helpers for unhashable/nested
+# =========================
 
 def nunique_safe(s: pd.Series) -> int:
     return _nunique_safe(s)
@@ -705,9 +704,10 @@ def _n_duplicates_safe(df: pd.DataFrame) -> int:
                 tmp[c] = tmp[c].map(_stable_str)
         return int(tmp.duplicated().sum())
 
-# ---------------------------------------------------------------------------
-# Demo dataset
-# ---------------------------------------------------------------------------
+
+# =========================
+# Demo data
+# =========================
 
 def demo_data(n_rows: int = 2000, seed: int = 42) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
