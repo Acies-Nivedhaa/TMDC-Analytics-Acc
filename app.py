@@ -49,6 +49,10 @@ ss.setdefault("hash_to_name", {})      # sha1 -> dataset name (for single-file u
 ss.setdefault("file_meta", {})         # key -> {"name": dataset_name, "filename": label shown in Files added}
 ss.setdefault("uploader_key", 0)       # forces file_uploader to reset
 
+# Trino metadata caches (scoped by connection signature)
+ss.setdefault("trino_cache", {"sig": "", "catalogs": [], "schemas": {}, "tables": {}})
+ss.setdefault("tr_auto_kick_done", False)
+
 # -----------------
 # Utilities
 # -----------------
@@ -213,12 +217,12 @@ with right:
                                 continue
 
                             added = 0
-                            for i, (inner_name, df) in enumerate(tables):
-                                if df is None or df.empty:
+                            for i, (inner_name, df_i) in enumerate(tables):
+                                if df_i is None or df_i.empty:
                                     continue
                                 ds_name = ensure_unique_name(set(ss.datasets.keys()), inner_name.rsplit("/", 1)[-1])
-                                ss.datasets[ds_name] = df
-                                ss.raw_datasets[ds_name] = df.copy()
+                                ss.datasets[ds_name] = df_i
+                                ss.raw_datasets[ds_name] = df_i.copy()
                                 if ss.active_ds is None:
                                     ss.active_ds = ds_name
                                 meta_key = f"{h}:{i}"  # unique key per inner file
@@ -248,7 +252,7 @@ with right:
                         ss.loaded_hashes.add(h)
                         ss.hash_to_name[h] = name
                         ss.file_meta[h] = {"name": name, "filename": base_name}
-                        log(f"Loaded '{name}' .")
+                        log(f"Loaded '{name}'.")
                         processed_any = True
 
                     # Clear uploader chip after successful ingest (avoid interfering with step change)
@@ -281,73 +285,267 @@ with right:
                                 st.rerun()
 
             # ---------------------------
-            # B) DataOS (Trino) (NEW)
+            # B) DataOS (Trino) — catalogs → schemas → tables (searchable) with multi-table load
             # ---------------------------
             else:
-                st.caption("Connect and pull a table from DataOS (Trino)")
+                st.caption("Connect and pull tables from DataOS (Trino)")
 
+                # --- Base connection fields ---
                 c1, c2 = st.columns(2)
-                host = c1.text_input("Host", placeholder="your.trino.host")
-                port = c2.number_input("Port", min_value=1, value=443, step=1)
+                host = c1.text_input("Host", value=ss.get("tr_host", ""), placeholder="your.trino.host", key="tr_host")
+                port = c2.number_input("Port", min_value=1, value=int(ss.get("tr_port", 7432)), step=1, key="tr_port")
 
-                user = c1.text_input("Username")
-                password = c2.text_input("Password", type="password")
+                user = c1.text_input("Username", value=ss.get("tr_user", ""), key="tr_user")
+                password = c2.text_input("Password", type="password", value=ss.get("tr_pass", ""), key="tr_pass")
 
-                http_scheme = c1.selectbox("HTTP scheme", ["https", "http"], index=0)
-                cluster_name = c2.text_input('HTTP header: cluster-name', value="minervac")
+                http_scheme = c1.selectbox(
+                    "HTTP scheme", ["https", "http"],
+                    index=0 if ss.get("tr_scheme", "https") == "https" else 1,
+                    key="tr_scheme",
+                )
+                cluster_name = c2.text_input(
+                    "Cluster name (HTTP header: cluster-name)",
+                    value=ss.get("tr_cluster", "minervac"),
+                    key="tr_cluster",
+                )
 
-                c3, c4 = st.columns(2)
-                catalog = c3.text_input("Catalog", value="icebase")
-                schema  = c4.text_input("Schema",  value="telemetry")
+                # --- Simple validity check ---
+                def _required_ok() -> bool:
+                    return bool(host.strip() and user.strip() and password.strip() and http_scheme.strip() and cluster_name.strip())
 
-                c5, c6 = st.columns(2)
-                table = c5.text_input("Table", value="device")
-                limit = c6.number_input("Row limit", min_value=1, value=1000, step=100)
+                # ---- Internal cache keyed by connection signature ----
+                sig = f"{host}|{port}|{user}|{http_scheme}|{cluster_name}"
+                if ss.trino_cache.get("sig") != sig:
+                    ss.trino_cache = {"sig": sig, "catalogs": [], "schemas": {}, "tables": {}}
+                    ss.tr_auto_kick_done = False
 
-                sql = f"SELECT * FROM {q_ident(catalog)}.{q_ident(schema)}.{q_ident(table)} LIMIT {int(limit)}"
-                st.code(sql, language="sql")
-
-                # Basic validation: disable until required fields are filled
-                required_ok = all([host.strip(), user.strip(), password.strip(), catalog.strip(), schema.strip(), table.strip()])
-
-                if st.button("Connect & Fetch", type="primary", disabled=not required_ok):
+                # ---- Trino config factory ----
+                def _cfg(catalog_hint: str | None = None, schema_hint: str | None = None):
                     try:
-                        import trino  # ensure package exists in this venv
+                        import trino  # noqa: F401
                     except Exception:
-                        st.error("The 'trino' package isn’t installed in this environment. Run: `pip install trino`")
-                    else:
-                        cfg = TrinoConfig(
-                            host=host.strip(),
-                            port=int(port),
-                            user=user.strip(),
-                            password=password,
-                            http_scheme=http_scheme,
-                            http_headers={"cluster-name": cluster_name.strip() or "minervac"},
-                            catalog=catalog.strip(),
-                            schema=schema.strip(),
-                        )
+                        st.error("The 'trino' package isn’t installed. Run: `pip install trino`")
+                        return None
+                    return TrinoConfig(
+                        host=host.strip(),
+                        port=int(port),
+                        user=user.strip(),
+                        password=password,
+                        http_scheme=http_scheme,
+                        http_headers={"cluster-name": (cluster_name.strip() or "minervac")},
+                        catalog=(catalog_hint or "system"),
+                        schema=(schema_hint or "jdbc"),
+                    )
+
+                # ---- Robust metadata helpers ----
+                def _list_catalogs(cfg) -> list[str]:
+                    last_err = None
+                    queries = [
+                        ("SELECT catalog_name FROM system.metadata.catalogs", "catalog_name"),
+                        ("SELECT catalog_name FROM system.jdbc.catalogs", "catalog_name"),
+                        ("SELECT table_cat AS catalog_name FROM system.jdbc.catalogs", "catalog_name"),
+                        ("SHOW CATALOGS", None),
+                    ]
+                    for sql, col in queries:
                         try:
                             df = query_df(sql, cfg)
-                            # Save as a new dataset like uploads do
-                            base_label = f"{catalog}.{schema}.{table}"
-                            ds_name = ensure_unique_name(set(ss.datasets.keys()), base_label)
-                            ss.datasets[ds_name] = df
-                            ss.raw_datasets[ds_name] = df.copy()
-                            ss.active_ds = ds_name
-                            # Track in file list with a pseudo key
-                            meta_key = f"trino:{ds_name}"
-                            ss.file_meta[meta_key] = {"name": ds_name, "filename": f"trino › {base_label}"}
-                            log(f"Loaded '{base_label}' from DataOS (Trino) into '{ds_name}'.")
-                            st.success(f"Loaded {len(df):,} rows.")
-                            st.dataframe(df.head(50), use_container_width=True)
-                            st.download_button(
-                                "Download as CSV",
-                                data=df.to_csv(index=False).encode("utf-8"),
-                                file_name=f"{catalog}_{schema}_{table}.csv",
-                                mime="text/csv",
-                            )
+                            if df is None or df.empty:
+                                continue
+                            use_col = col or next((c for c in df.columns if c.lower() in ("catalog", "catalog_name")), df.columns[0])
+                            return sorted(df[use_col].astype(str).tolist())
                         except Exception as e:
-                            st.error(f"Query failed: {e}")
+                            last_err = e
+                            continue
+                    raise RuntimeError(f"Unable to fetch catalogs; last error: {last_err}")
+
+                def _list_schemas(cfg, catalog: str) -> list[str]:
+                    """Robust schema listing with fallbacks."""
+                    esc_catalog = catalog.replace("'", "''")
+                    candidates = [
+                        (f"SELECT schema_name FROM {q_ident(catalog)}.information_schema.schemata ORDER BY schema_name", "schema_name"),
+                        (f"SELECT schema_name FROM system.jdbc.schemata WHERE catalog_name = '{esc_catalog}' ORDER BY schema_name", "schema_name"),
+                        (f"SELECT table_schem AS schema_name FROM system.jdbc.schemata WHERE table_cat = '{esc_catalog}' ORDER BY schema_name", "schema_name"),
+                        (f"SHOW SCHEMAS FROM {q_ident(catalog)}", None),
+                        (f"SELECT schema_name FROM system.metadata.schemata WHERE catalog_name = '{esc_catalog}' ORDER BY schema_name", "schema_name"),
+                    ]
+                    last_err = None
+                    for sql, expected_col in candidates:
+                        try:
+                            df = query_df(sql, cfg)
+                            if df is None or df.empty:
+                                continue
+                            if expected_col is None:
+                                col = next((c for c in df.columns if c.lower() in ("schema", "schema_name")), df.columns[0])
+                            else:
+                                col = expected_col if expected_col in df.columns else next(
+                                    (c for c in df.columns if c.lower() == expected_col.lower()), df.columns[0]
+                                )
+                            return sorted(df[col].astype(str).tolist())
+                        except Exception as e:
+                            last_err = e
+                            continue
+                    raise RuntimeError(f"Unable to fetch schemas for catalog {catalog}; last error: {last_err}")
+
+                def _list_tables(cfg, catalog: str, schema: str) -> list[str]:
+                    """Robust table listing with fallbacks."""
+                    esc_schema = schema.replace("'", "''")
+                    esc_catalog = catalog.replace("'", "''")
+                    candidates = [
+                        (f"SELECT table_name FROM {q_ident(catalog)}.information_schema.tables WHERE table_schema = '{esc_schema}' ORDER BY table_name", "table_name"),
+                        (f"SHOW TABLES FROM {q_ident(catalog)}.{q_ident(schema)}", None),
+                        (f"SELECT table_name FROM system.jdbc.tables WHERE catalog_name = '{esc_catalog}' AND schema_name = '{esc_schema}' ORDER BY table_name", "table_name"),
+                        (f"SELECT table_name FROM system.jdbc.tables WHERE table_cat = '{esc_catalog}' AND table_schem = '{esc_schema}' ORDER BY table_name", "table_name"),
+                    ]
+                    last_err = None
+                    for sql, expected_col in candidates:
+                        try:
+                            df = query_df(sql, cfg)
+                            if df is None or df.empty:
+                                continue
+                            if expected_col is None:
+                                col = next((c for c in df.columns if c.lower() in ("table", "table_name")), df.columns[0])
+                            else:
+                                col = expected_col if expected_col in df.columns else next(
+                                    (c for c in df.columns if c.lower() == expected_col.lower()), df.columns[0]
+                                )
+                            return sorted(df[col].astype(str).tolist())
+                        except Exception as e:
+                            last_err = e
+                            continue
+                    raise RuntimeError(f"Unable to fetch tables for {catalog}.{schema}; last error: {last_err}")
+
+                # ---- Auto/Manual trigger to fetch catalogs ----
+                ss.setdefault("tr_auto_kick_done", False)
+                trigger_catalogs = False
+                if _required_ok() and not ss.trino_cache["catalogs"] and not ss.tr_auto_kick_done:
+                    trigger_catalogs = True
+                    ss.tr_auto_kick_done = True
+                if st.button("Load catalogs", disabled=not _required_ok(), key="tr_btn_load_catalogs"):
+                    trigger_catalogs = True
+
+                if trigger_catalogs:
+                    cfg_meta = _cfg("system", "jdbc")
+                    if cfg_meta:
+                        try:
+                            with st.spinner("Fetching catalogs…"):
+                                ss.trino_cache["catalogs"] = _list_catalogs(cfg_meta)
+                            if not ss.trino_cache["catalogs"]:
+                                st.info("No catalogs found for these connection details.")
+                        except Exception as e:
+                            st.error(f"Failed to fetch catalogs: {e}")
+
+                # ---- Catalog selector ----
+                selected_catalog = None
+                if ss.trino_cache["catalogs"]:
+                    selected_catalog = st.selectbox(
+                        "Catalog",
+                        options=ss.trino_cache["catalogs"],
+                        key="tr_sel_catalog",
+                        placeholder="Type to search catalogs…",
+                    )
+                else:
+                    st.caption("Fill connection fields and click **Load catalogs** to continue.")
+
+                # ---- Schema selector (with manual fallback) ----
+                selected_schema = None
+                if selected_catalog:
+                    if selected_catalog not in ss.trino_cache["schemas"]:
+                        cfg_s = _cfg(selected_catalog, "information_schema")
+                        if cfg_s:
+                            try:
+                                with st.spinner("Fetching schemas…"):
+                                    ss.trino_cache["schemas"][selected_catalog] = _list_schemas(cfg_s, selected_catalog)
+                                if not ss.trino_cache["schemas"][selected_catalog]:
+                                    st.info("No schemas in this catalog.")
+                            except Exception as e:
+                                ss.trino_cache["schemas"][selected_catalog] = []
+                                st.warning("Schema list unavailable for this catalog. Enter a schema manually below.")
+                                st.caption(f"Details: {e}")
+
+                    if ss.trino_cache["schemas"].get(selected_catalog):
+                        selected_schema = st.selectbox(
+                            "Schema",
+                            options=ss.trino_cache["schemas"][selected_catalog],
+                            key="tr_sel_schema",
+                            placeholder="Type to search schemas…",
+                        )
+                    else:
+                        selected_schema = st.text_input("Schema (manual)", key="tr_schema_manual", placeholder="e.g. telemetry")
+
+                # ---- Tables multiselect (with manual fallback) + loader ----
+                if selected_catalog and selected_schema:
+                    key_ts = (selected_catalog, selected_schema)
+                    if key_ts not in ss.trino_cache["tables"] and selected_schema.strip():
+                        cfg_t = _cfg(selected_catalog, "information_schema")
+                        if cfg_t:
+                            try:
+                                with st.spinner("Fetching tables…"):
+                                    ss.trino_cache["tables"][key_ts] = _list_tables(cfg_t, selected_catalog, selected_schema)
+                                if not ss.trino_cache["tables"][key_ts]:
+                                    st.info("No tables in this schema.")
+                            except Exception as e:
+                                ss.trino_cache["tables"][key_ts] = []
+                                st.warning("Table list unavailable. Enter table names manually below.")
+                                st.caption(f"Details: {e}")
+
+                    available = ss.trino_cache["tables"].get(key_ts, [])
+
+                    c7, c8 = st.columns([2, 1])
+                    if available:
+                        selected_tables = c7.multiselect(
+                            "Tables (type to search, multi-select)",
+                            options=available,
+                            default=[],
+                            placeholder="Start typing to search tables…",
+                            key="tr_sel_tables",
+                        )
+                    else:
+                        manual = c7.text_area(
+                            "Tables (comma/space separated)",
+                            value="",
+                            height=80,
+                            key="tr_tables_manual",
+                            placeholder="table_a, table_b, table_c",
+                        )
+                        selected_tables = [t.strip() for t in manual.replace("\n", ",").replace("\t", ",").replace(" ", ",").split(",") if t.strip()]
+
+                    limit_each = c8.number_input("Row limit per table", min_value=1, value=1000, step=100, key="tr_limit_each")
+
+                    if st.button(
+                        f"Load {len(selected_tables) if selected_tables else 0} table(s)",
+                        type="primary",
+                        disabled=not selected_tables,
+                        key="tr_btn_load_tables",
+                    ):
+                        cfg_q = _cfg(selected_catalog, selected_schema)
+                        if cfg_q:
+                            loaded = 0
+                            errors = 0
+                            for tname in selected_tables:
+                                try:
+                                    sql = (
+                                        f"SELECT * FROM "
+                                        f"{q_ident(selected_catalog)}.{q_ident(selected_schema)}.{q_ident(tname)} "
+                                        f"LIMIT {int(limit_each)}"
+                                    )
+                                    df_t = query_df(sql, cfg_q)
+                                    label = f"{selected_catalog}.{selected_schema}.{tname}"
+                                    ds_name = ensure_unique_name(set(ss.datasets.keys()), label)
+                                    ss.datasets[ds_name] = df_t
+                                    ss.raw_datasets[ds_name] = df_t.copy()
+                                    ss.active_ds = ds_name
+                                    ss.file_meta[f"trino:{ds_name}:{len(ss.file_meta)}"] = {"name": ds_name, "filename": f"trino › {label}"}
+                                    log(f"Loaded '{label}' into '{ds_name}' ({len(df_t):,} rows).")
+                                    loaded += 1
+                                except Exception as e:
+                                    st.error(f"Failed to load '{tname}': {e}")
+                                    errors += 1
+                            if loaded:
+                                st.success(f"Loaded {loaded} table(s).")
+                            if errors:
+                                st.warning(f"{errors} table(s) failed.")
+                            if loaded and ss.active_ds in ss.datasets:
+                                st.dataframe(ss.datasets[ss.active_ds].head(50), use_container_width=True)
 
         # If nothing loaded yet, stop here
         if not ss.datasets:
@@ -493,7 +691,7 @@ with right:
     # =========================================================
     # EDA STEP
     # =========================================================
-    elif ss.step == "EDA":
+    if ss.step == "EDA":
         if not ss.datasets:
             st.info("Upload one or more files in **Summary** to begin.")
             st.stop()
@@ -554,7 +752,7 @@ with right:
     # =========================================================
     # PREPROCESS STEP
     # =========================================================
-    elif ss.step == "Preprocess":
+    if ss.step == "Preprocess":
         if not ss.datasets:
             st.info("Upload one or more files in **Summary** to begin.")
             st.stop()
@@ -589,7 +787,7 @@ with right:
     # =========================================================
     # FINAL SUMMARY STEP
     # =========================================================
-    elif ss.step == "Final Summary":
+    if ss.step == "Final Summary":
         if not ss.datasets:
             st.info("Upload one or more files in **Summary** to begin.")
             st.stop()
