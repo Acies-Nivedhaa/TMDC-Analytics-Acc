@@ -509,7 +509,7 @@ with right:
                         )
                         selected_tables = [t.strip() for t in manual.replace("\n", ",").replace("\t", ",").replace(" ", ",").split(",") if t.strip()]
 
-                    limit_each = c8.number_input("Row limit per table", min_value=1, value=1000, step=100, key="tr_limit_each")
+                    limit_each = c8.number_input("Row limit per table", min_value=1, value=10, step=100, key="tr_limit_each")
 
                     if st.button(
                         f"Load {len(selected_tables) if selected_tables else 0} table(s)",
