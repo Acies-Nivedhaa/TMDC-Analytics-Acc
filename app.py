@@ -633,31 +633,7 @@ with right:
 
             st.markdown("---")
 
-            # NEW: Delete dataset(s) — works for Trino-loaded tables too
-            st.markdown("**Delete dataset(s)**")
-            to_delete = st.multiselect(
-                "Choose one or more datasets to remove",
-                options=names,
-                default=[],
-                placeholder="Type to search datasets…",
-                key="ds_delete_choices",
-            )
-            cols_del = st.columns([1, 5])
-            with cols_del[0]:
-                if st.button(
-                    f"Delete {len(to_delete)} selected" if to_delete else "Delete",
-                    type="secondary",
-                    disabled=not to_delete,
-                    key="btn_delete_datasets",
-                    help="Removes selected datasets from this app session",
-                ):
-                    for nm in to_delete:
-                        delete_dataset(nm)
-                    st.success(f"Deleted {len(to_delete)} dataset(s).")
-                    st.rerun()
-
-
-        # ----- Active dataset content (Summary visuals) -----
+       # ----- Active dataset content (Summary visuals) -----
         df = ss.datasets[ss.active_ds]
 
         st.subheader("Summary")
