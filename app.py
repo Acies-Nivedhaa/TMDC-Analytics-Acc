@@ -23,11 +23,13 @@ from core.preprocess_text import render_preprocess_text
 from core.preprocess_timeseries import render_preprocess_timeseries
 from core.preprocess_encoding import render_preprocess_encoding
 from core.eda_types import render_eda_types
-from core.final_summary import render_final_summary
 from ui.components import header_bar, kpi_row, section, render_table, control_bar
-
-# NEW: Trino helpers
 from core.trino_connection import TrinoConfig, query_df, q_ident
+from core.auto_insights import render_auto_insights
+from core.final_summary_pages import render_final_summary_suite
+from core.json_flatten import detect_jsonlike_columns, flatten_json_columns
+
+
 
 st.set_page_config(page_title="Analytics Accelerator — Summary", layout="wide")
 
@@ -66,6 +68,21 @@ def pop_history() -> pd.DataFrame | None:
     if ss.df_history:
         return ss.df_history.pop()
     return None
+
+def delete_dataset(ds_name: str):
+    """Remove a dataset everywhere (datasets, raw, file_meta, active_ds)."""
+    ss.datasets.pop(ds_name, None)
+    ss.raw_datasets.pop(ds_name, None)
+    # drop any file_meta entries that reference this dataset
+    for key in list(ss.file_meta.keys()):
+        if ss.file_meta[key].get("name") == ds_name:
+            ss.file_meta.pop(key, None)
+    # if we just removed the active dataset, pick another or clear
+    if ss.active_ds == ds_name:
+        ss.active_ds = next(iter(ss.datasets.keys()), None)
+    log(f"Removed dataset '{ds_name}'.")
+
+
 
 def dataset_combo(label: str, key_prefix: str):
     """Passive selectbox (type-to-search) that keeps ss.active_ds in sync."""
@@ -262,27 +279,16 @@ with right:
                             st.rerun()
 
                 # --- Files added (per-file removal) ---
+                # --- Files added (display only; deletions happen via bin in Datasets table) ---
                 if ss.file_meta:
                     st.markdown("**Files added**")
-                    for key, meta in list(ss.file_meta.items()):
+                    for key, meta in ss.file_meta.items():
                         ds_name = meta.get("name")
                         fname = meta.get("filename", ds_name)
+                        col1, col2 = st.columns([6, 6])
+                        col1.write(f"**{fname}**")
+                        col2.caption(f"Dataset: {ds_name}")
 
-                        c1, c2, c3 = st.columns([6, 5, 1])
-                        with c1:
-                            st.write(f"**{fname}**")
-                        with c2:
-                            st.caption(f"Dataset: {ds_name}")
-                        with c3:
-                            if st.button("✖", key=f"rm_{key}", help=f"Remove '{ds_name}' from analysis"):
-                                ss.datasets.pop(ds_name, None)
-                                ss.raw_datasets.pop(ds_name, None)
-                                # Only remove the specific mapping we displayed
-                                ss.file_meta.pop(key, None)
-                                if ss.active_ds == ds_name:
-                                    ss.active_ds = next(iter(ss.datasets.keys()), None)
-                                log(f"Removed dataset '{ds_name}' via file list.")
-                                st.rerun()
 
             # ---------------------------
             # B) DataOS (Trino) — catalogs → schemas → tables (searchable) with multi-table load
@@ -569,31 +575,87 @@ with right:
                     "memory_mb": f"{ov['memory_mb']:.2f}",
                     "duplicates": f"{ov['n_duplicates']:,}",
                 })
-            render_table(pd.DataFrame(stats_rows), height=220)
+            # Stats table WITH delete bin per row (keeps the same columns you had)
+            names = sorted(ss.datasets.keys())
 
-            # Rename only; propagate to mappings so only the new name is referenced
+            # Header row
+            h1, h2, h3, h4, h5, h6 = st.columns([6, 1.2, 1, 1.2, 1.2, 0.8])
+            h1.markdown("**dataset**")
+            h2.markdown("**rows**") 
+            h3.markdown("**cols**")
+            h4.markdown("**memory_mb**")
+            h5.markdown("**duplicates**")
+            h6.markdown("** **")  # bin column
+
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+            # Data rows with per-row bin button
+            for i, nm in enumerate(names):
+                ov = overview_stats(ss.datasets[nm])
+                c1, c2, c3, c4, c5, c6 = st.columns([6, 1.2, 1, 1.2, 1.2, 0.8])
+
+                c1.write(nm)
+                c2.write(f"{ov['rows']:,}")
+                c3.write(f"{ov['cols']}")
+                c4.write(f"{ov['memory_mb']:.2f}")
+                c5.write(f"{ov['n_duplicates']:,}")
+
+                if c6.button("🗑️", key=f"del_{i}_{nm}", help=f"Delete '{nm}'"):
+                    delete_dataset(nm)
+                    st.rerun()
+
+
+            # Rename (existing)
             rn_src = st.selectbox("Rename dataset", ["—"] + names, index=0, key="rn_src")
             new_name = st.text_input("New name", value="", key="rn_new")
-            if rn_src != "—" and new_name and st.button("Apply rename", key="rn_btn"):
-                if new_name in ss.datasets:
-                    st.error("Name already exists.")
-                else:
-                    # Move in datasets + raw
-                    ss.datasets[new_name] = ss.datasets.pop(rn_src)
-                    ss.raw_datasets[new_name] = ss.raw_datasets.pop(rn_src)
-                    # Update active selection
-                    if ss.active_ds == rn_src:
-                        ss.active_ds = new_name
-                    # Update hash->name mapping
-                    for h, nm in list(ss.hash_to_name.items()):
-                        if nm == rn_src:
-                            ss.hash_to_name[h] = new_name
-                    # Update file_meta mapping so list shows new name
-                    for k, meta in list(ss.file_meta.items()):
-                        if meta.get("name") == rn_src:
-                            meta["name"] = new_name
-                    log(f"Renamed '{rn_src}' → '{new_name}'.")
+            col_rn_apply, col_spacer = st.columns([1, 5])
+            with col_rn_apply:
+                if rn_src != "—" and new_name and st.button("Apply rename", key="rn_btn"):
+                    if new_name in ss.datasets:
+                        st.error("Name already exists.")
+                    else:
+                        # Move in datasets + raw
+                        ss.datasets[new_name] = ss.datasets.pop(rn_src)
+                        ss.raw_datasets[new_name] = ss.raw_datasets.pop(rn_src)
+                        # Update active selection
+                        if ss.active_ds == rn_src:
+                            ss.active_ds = new_name
+                        # Update hash->name mapping
+                        for h, nm in list(ss.hash_to_name.items()):
+                            if nm == rn_src:
+                                ss.hash_to_name[h] = new_name
+                        # Update file_meta mapping so list shows new name
+                        for k, meta in list(ss.file_meta.items()):
+                            if meta.get("name") == rn_src:
+                                meta["name"] = new_name
+                        log(f"Renamed '{rn_src}' → '{new_name}'.")
+                        st.rerun()
+
+            st.markdown("---")
+
+            # NEW: Delete dataset(s) — works for Trino-loaded tables too
+            st.markdown("**Delete dataset(s)**")
+            to_delete = st.multiselect(
+                "Choose one or more datasets to remove",
+                options=names,
+                default=[],
+                placeholder="Type to search datasets…",
+                key="ds_delete_choices",
+            )
+            cols_del = st.columns([1, 5])
+            with cols_del[0]:
+                if st.button(
+                    f"Delete {len(to_delete)} selected" if to_delete else "Delete",
+                    type="secondary",
+                    disabled=not to_delete,
+                    key="btn_delete_datasets",
+                    help="Removes selected datasets from this app session",
+                ):
+                    for nm in to_delete:
+                        delete_dataset(nm)
+                    st.success(f"Deleted {len(to_delete)} dataset(s).")
                     st.rerun()
+
 
         # ----- Active dataset content (Summary visuals) -----
         df = ss.datasets[ss.active_ds]
@@ -620,11 +682,66 @@ with right:
             )
             st.caption(subtitle)
 
-            schema_tbl = pd.DataFrame({"column": df.columns, "dtype": [str(t) for t in df.dtypes]})
+            # --- JSON flatten preview/save ---
+            from core.json_flatten import detect_jsonlike_columns, flatten_json_columns
+
+            df_preview = df
+
+            # Auto-detect JSON-like columns (permissive)
+            auto_json_cols = detect_jsonlike_columns(df)
+
+            # Manual override: user can force columns to flatten
+            cols_to_flatten = st.multiselect(
+                "JSON-like columns to flatten (auto-detected preselected)",
+                options=list(df.columns),
+                default=auto_json_cols,
+                placeholder="Pick columns such as 'item_data' …",
+                key="json_cols_select",
+            )
+
+            c_flat, c_lvl, c_hide = st.columns([1, 1, 1])
+            with c_flat:
+                do_flat = st.checkbox("Flatten in preview", value=bool(cols_to_flatten), key="preview_flatten_json")
+            with c_lvl:
+                max_level = st.number_input("Max nested level", 1, 5, value=2, step=1, key="preview_json_maxlvl")
+            with c_hide:
+                hide_originals = st.checkbox("Hide original JSON cols", value=True, key="preview_hide_json_src")
+
+            if do_flat and cols_to_flatten:
+                df_preview, flattened_cols, notes = flatten_json_columns(
+                    df, columns=cols_to_flatten, max_level=int(max_level)
+                )
+                if hide_originals:
+                    # Hide the original nested columns in the preview only
+                    df_preview = df_preview.drop(columns=list(cols_to_flatten), errors="ignore")
+
+                if flattened_cols:
+                    st.caption(f"Flattened in preview: {', '.join(flattened_cols)}")
+                for n in notes:
+                    st.caption(f"⚠️ {n}")
+
+                # Save flattened as a new dataset for downstream steps
+                if st.button("Save flattened as NEW dataset", key="btn_save_flattened"):
+                    new_name = ensure_unique_name(set(ss.datasets.keys()), f"{ss.active_ds}_flat")
+                    ss.datasets[new_name] = df_preview.copy()
+                    ss.raw_datasets[new_name] = df_preview.copy()
+                    ss.active_ds = new_name
+                    log(f"Created flattened dataset '{new_name}'.")
+                    st.success(f"Saved as **{new_name}**.")
+                    st.rerun()
+            elif cols_to_flatten:
+                st.caption("Tick **Flatten in preview** to see expanded columns.")
+            else:
+                st.caption("No JSON-like columns detected. Use the multiselect to force columns if needed.")
+
+            # Show schema/preview for the (possibly) flattened frame
+            schema_tbl = pd.DataFrame({"column": df_preview.columns, "dtype": [str(t) for t in df_preview.dtypes]})
             render_table(schema_tbl, height=260)
 
             st.markdown("**Preview (first 20 rows)**")
-            st.dataframe(df.head(20), use_container_width=True)
+            st.dataframe(df_preview.head(20), use_container_width=True)
+
+
 
         with section("Cardinality", expandable=False):
             schema_local = infer_schema(df)
@@ -792,11 +909,9 @@ with right:
             st.info("Upload one or more files in **Summary** to begin.")
             st.stop()
 
-        # keep active_ds valid
         names_all = sorted(ss.datasets.keys())
         if ss.active_ds not in names_all:
             ss.active_ds = names_all[0]
 
-        df = ss.datasets[ss.active_ds]
-        # Outstanding issues + KPIs + compact preview (from core/final_summary.py)
-        render_final_summary(df, st.session_state)
+        render_final_summary_suite(st.session_state)
+
