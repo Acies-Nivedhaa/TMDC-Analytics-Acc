@@ -6,6 +6,7 @@ import json as _json
 import numpy as np
 import pandas as pd
 import pandas.api.types as ptypes
+from pandas.api.types import is_categorical_dtype
 import streamlit as st
 
 # -------------------- small utils --------------------
@@ -59,6 +60,18 @@ def _discretize_numeric(s: pd.Series, q: int = 10) -> pd.Series:
 def _entropy(p: np.ndarray) -> float:
     p = p[p > 0]
     return float(-(p * np.log(p)).sum())
+
+def _to_str_for_crosstab(s) -> pd.Series:
+    """
+    Convert any series-like input (including pandas.Categorical) into a string Series
+    that works with pd.crosstab across pandas versions.
+    """
+    s = s if isinstance(s, pd.Series) else pd.Series(s)
+    # Categorical -> go through 'object' first (pandas quirk)
+    if is_categorical_dtype(s):
+        s = s.astype("object")
+    # Use pandas 'string' dtype and show missing as visible token
+    return s.astype("string").fillna("<NA>")
 
 # -------------------- association measures --------------------
 
@@ -255,5 +268,7 @@ def render_bivariate(df: pd.DataFrame, sample_n: int | None = None) -> None:
         st.bar_chart(means)
     else:
         st.markdown("**Counts heatmap (category vs category)**")
-        ct = pd.crosstab(_as_category(x).astype(str), _as_category(y).astype(str))
+        xs = _to_str_for_crosstab(_as_category(x))
+        ys = _to_str_for_crosstab(_as_category(y))
+        ct = pd.crosstab(xs, ys)
         st.dataframe(ct, use_container_width=True)
