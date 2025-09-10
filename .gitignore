@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS clutter
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Build / packaging
+build/
+dist/
+*.egg-info/

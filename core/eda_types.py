@@ -1,5 +1,16 @@
 # core/eda_types.py
 from __future__ import annotations
+"""
+EDA ▸ Types
+-----------
+Suggests friendlier dtypes (string/integer/float/datetime/boolean) for columns,
+lets users preview conversions, then apply them with policies for invalid values.
+
+Notes:
+- We intentionally do NOT surface pandas 'category' here (steer users to Encoding tab).
+- All thresholds/heuristics are unchanged; this is a comment/cleanup pass only.
+"""
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -8,21 +19,32 @@ from pandas.api.types import (
     is_bool_dtype, is_categorical_dtype, is_integer_dtype, is_float_dtype
 )
 from ui.components import section, kpi_row
-from core.summary import nunique_safe
+from core.overview import nunique_safe
+
 
 # ---------- sampling helpers ----------
+
 def _sample(s: pd.Series, n: int = 4000) -> pd.Series:
+    """Return at most n rows from s (keeps existing sampling behavior)."""
     return s.sample(n, random_state=0) if len(s) > n else s
 
+
 # ---------- detection heuristics (string/object friendly) ----------
+
 def _boolean_rate(s: pd.Series) -> float:
+    """Share of values that look like true/false (case/whitespace tolerant)."""
     s = _sample(s.astype("string")).str.strip().str.lower()
-    truthy = {"true","t","yes","y","1"}
-    falsy  = {"false","f","no","n","0"}
+    truthy = {"true", "t", "yes", "y", "1"}
+    falsy  = {"false", "f", "no", "n", "0"}
     denom = s.notna().sum()
     return float(s.isin(truthy | falsy).sum()) / max(1, denom)
 
+
 def _numeric_rate(s: pd.Series) -> tuple[float, bool]:
+    """
+    Share of values that parse as numeric + whether they are mostly integral.
+    Returns: (rate, intish_flag)
+    """
     x = pd.to_numeric(_sample(s), errors="coerce")
     base = _sample(s)
     rate = float(x.notna().sum()) / max(1, base.notna().sum())
@@ -32,33 +54,40 @@ def _numeric_rate(s: pd.Series) -> tuple[float, bool]:
         intish = bool((frac < 1e-9).mean() > 0.98)
     return rate, intish
 
+
 def _datetime_rate(s: pd.Series) -> float:
+    """Share of values that parse as datetimes with liberal inference."""
     x = pd.to_datetime(_sample(s), errors="coerce", infer_datetime_format=True)
     base = _sample(s)
     return float(x.notna().sum()) / max(1, base.notna().sum())
 
+
 # ---------- dtype naming (no 'category' in UI) ----------
+
 def _canonical_current_dtype(s: pd.Series) -> str:
-    """Map pandas dtype to technical labels WITHOUT surfacing 'category'."""
+    """
+    Map pandas dtype to a user-facing label, avoiding 'category'.
+    Treats 'object'/'category' as 'string' for this UI.
+    """
     if is_datetime64_any_dtype(s): return "datetime"
     if is_bool_dtype(s):           return "boolean"
     if is_integer_dtype(s):        return "integer"
     if is_float_dtype(s):          return "float"
-    # treat pandas 'category' and 'object' as string in this UI
     return "string"
+
 
 def _suggest_for(s: pd.Series) -> tuple[str, str]:
     """
-    Recommend one of: {'string','integer','float','datetime','boolean'} + reason.
-    Never return 'category' (point users to Encoding tab instead).
+    Recommend one of: {'string','integer','float','datetime','boolean'} and a human reason.
+    Never returns 'category' (encoding is handled elsewhere).
     """
-    # already strongly typed? keep it
+    # Strong existing dtypes → keep
     if is_datetime64_any_dtype(s): return "datetime", "Already parsed as datetime"
     if is_bool_dtype(s):           return "boolean",  "Already boolean"
     if is_integer_dtype(s):        return "integer",  "Already integer"
     if is_float_dtype(s):          return "float",    "Already float"
 
-    # current is object/category -> infer
+    # Object/category → infer best-fit
     br = _boolean_rate(s)
     if br >= 0.95:
         return "boolean", f"≈{br:.0%} values look like yes/no/true/false"
@@ -72,31 +101,37 @@ def _suggest_for(s: pd.Series) -> tuple[str, str]:
         return ("integer" if intish else "float",
                 f"≈{nr:.0%} values are numeric{' (mostly whole numbers)' if intish else ''}")
 
-    # low variety: keep as string but hint encoding later
+    # Low variety → keep as string, hint encoding
     nun = int(nunique_safe(s))
     nonnull = s.notna().sum()
-    if nun <= min(50, max(3, int(0.2 * max(1, nonnull)))):
+    if nun <= min(50, max(3, int(0.2 * max(1, nonnull)))):  # unchanged threshold
         return "string", f"Low variety ({nun} distinct values) — consider one-hot in Encoding tab"
 
     return "string", "Mixed/free-text or high variety"
 
+
 # ---------- conversion helpers ----------
-_TRUTHY = {"true","t","yes","y","1"}
-_FALSY  = {"false","f","no","n","0"}
+
+_TRUTHY = {"true", "t", "yes", "y", "1"}
+_FALSY  = {"false", "f", "no", "n", "0"}
+
 
 def _to_bool_series(s: pd.Series) -> pd.Series:
+    """Parse common boolean spellings into pandas nullable BooleanDtype."""
     s_str = s.astype("string").str.strip().str.lower()
     out = pd.Series(pd.NA, index=s.index, dtype="boolean")
     out = out.mask(s_str.isin(_TRUTHY), True)
     out = out.mask(s_str.isin(_FALSY),  False)
     return out
 
+
 def _convert(series: pd.Series, target: str, *, dt_opts: dict) -> tuple[pd.Series, pd.Series]:
     """
     Convert a Series to target dtype; returns (converted, invalid_mask).
+    Invalid mask marks rows where a non-null input failed to parse/convert.
     """
     target = target.lower()
-    if target in ("no change","keep"):
+    if target in ("no change", "keep"):
         return series, pd.Series(False, index=series.index)
 
     if target == "string":
@@ -128,12 +163,14 @@ def _convert(series: pd.Series, target: str, *, dt_opts: dict) -> tuple[pd.Serie
         invalid = series.notna() & parsed.isna()
         return parsed, invalid
 
-    # no 'category' in this UI
+    # 'category' is deliberately not handled here
     return series, pd.Series(False, index=series.index)
 
+
 # ---------- main UI ----------
+
 def render_eda_types(ss) -> None:
-    """EDA ▸ Types (no 'category' dtype shown or recommended)."""
+    """Main panel: recommend types, let users preview conversions, then apply in bulk."""
     if not ss.active_ds or ss.active_ds not in ss.datasets:
         st.info("Pick a dataset to begin.")
         st.stop()
@@ -141,16 +178,21 @@ def render_eda_types(ss) -> None:
     df = ss.datasets[ss.active_ds]
     rows, cols = df.shape
 
+    # session state scaffolding (kept as-is)
     ss.setdefault("types_selected", set())
     ss.setdefault("types_target", {})
     ss.setdefault("types_dt_opts", {})
     ss.setdefault("types_policy", {})
     ss.setdefault("types_fill", {})
 
-    kpi_row([("Rows", f"{rows:,}"), ("Cols", cols),
-             ("Text-like cols", int((df.dtypes == "object").sum() + sum(is_categorical_dtype(df[c]) for c in df.columns)))])
+    # KPI tiles
+    kpi_row([
+        ("Rows", f"{rows:,}"),
+        ("Cols", cols),
+        ("Text-like cols", int((df.dtypes == "object").sum() + sum(is_categorical_dtype(df[c]) for c in df.columns))),
+    ])
 
-    # build recs (map categorical -> string in 'current dtype')
+    # Build per-column recommendations (no functional changes)
     recs = []
     flagged = set()
     for c in df.columns:
@@ -170,6 +212,7 @@ def render_eda_types(ss) -> None:
         })
     rec_df = pd.DataFrame(recs)
 
+    # -------- Table of columns + quick selection --------
     with section("Columns & recommendations", expandable=False):
         q = st.text_input("Search", key="types_search", placeholder="Type to filter columns…")
         view = rec_df
@@ -185,10 +228,11 @@ def render_eda_types(ss) -> None:
 
         view = view.sort_values(["needs_change", "column"], ascending=[False, True]).reset_index(drop=True)
         view = view.copy()
+        # Preselect flagged columns (those that need change)
         view["✓ Select"] = view["column"].apply(lambda c: (c in ss.types_selected) or (c in flagged))
 
         edited = st.data_editor(
-            view[["status","✓ Select","column","current dtype","recommended","reason"]],
+            view[["status", "✓ Select", "column", "current dtype", "recommended", "reason"]],
             hide_index=True,
             use_container_width=True,
             column_config={
@@ -203,20 +247,40 @@ def render_eda_types(ss) -> None:
         )
         ss.types_selected = set(edited.loc[edited["✓ Select"] == True, "column"].tolist())
 
-        c1, c2 = st.columns([1,1])
+        c1, c2 = st.columns([1, 1])
         with c1:
             if st.button("Select all (filtered)"):
-                ss.types_selected = set(edited["column"].tolist()); st.rerun()
+                ss.types_selected = set(edited["column"].tolist())
+                st.rerun()
         with c2:
             if st.button("Clear selection"):
-                ss.types_selected = set(); st.rerun()
+                ss.types_selected = set()
+                st.rerun()
 
     if not ss.types_selected:
         st.info("Select one or more columns above to set conversions, preview, and apply.")
         return
 
+    # -------- Per-column preview controls --------
     with section("Selected columns — conversions & preview", expandable=False):
+
+        # Collapsible legend with slightly smaller text
+        with st.expander("Invalid-value policy (how unparseable values are handled)", expanded=False):
+            st.markdown(
+                """
+        <div style="font-size:0.9rem; line-height:1.35;">
+        - <strong>Set as NaN/NaT</strong> – keep the row; store the value as missing.<br>
+        - <strong>Drop affected rows</strong> – remove rows with invalid values when you click <strong>Apply conversions</strong> (across all selected columns).<br>
+        - <strong>Fill with constant</strong> – replace invalid with your constant (it’s parsed to the target dtype; if parsing fails it becomes missing).
+        </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+
         rec_map = {r["column"]: r["recommended"] for r in recs}
+
         for col in [c for c in df.columns if c in ss.types_selected]:
             s = df[col]
             cur_dtype = _canonical_current_dtype(s)
@@ -226,48 +290,65 @@ def render_eda_types(ss) -> None:
             st.markdown(f"#### {col}")
             st.caption(f"Current: `{cur_dtype}` • Recommended: **{rec}**")
 
+            # Conversion target
             options = ["no change", "string", "datetime", "float", "integer", "boolean"]
             default_label = ss.types_target.get(col, rec if cur_dtype != rec else "no change")
             default_idx = options.index(default_label) if default_label in options else 0
             target = st.selectbox("Convert to", options=options, index=default_idx, key=f"types_target_select_{col}")
             ss.types_target[col] = target
 
-            # datetime options
+            # Datetime parsing options (only if selected)
             dt_opts = ss.types_dt_opts.get(col, {"fmt": "", "dayfirst": False, "as_utc": False})
             if target == "datetime":
-                c1, c2, c3 = st.columns([1,1,1])
+                c1, c2, c3 = st.columns([1, 1, 1])
                 with c1:
-                    dt_opts["fmt"] = st.text_input("Datetime format (optional)", value=dt_opts.get("fmt",""),
-                                                   placeholder="%d/%m/%Y", key=f"types_dt_fmt_{col}")
+                    dt_opts["fmt"] = st.text_input(
+                        "Datetime format (optional)",
+                        value=dt_opts.get("fmt", ""),
+                        placeholder="%d/%m/%Y",
+                        key=f"types_dt_fmt_{col}",
+                    )
                 with c2:
-                    dt_opts["dayfirst"] = st.checkbox("Day first", value=dt_opts.get("dayfirst", False),
-                                                      key=f"types_dt_dayfirst_{col}")
+                    dt_opts["dayfirst"] = st.checkbox(
+                        "Day first", value=dt_opts.get("dayfirst", False), key=f"types_dt_dayfirst_{col}"
+                    )
                 with c3:
-                    dt_opts["as_utc"] = st.checkbox("Parse as UTC", value=dt_opts.get("as_utc", False),
-                                                    key=f"types_dt_utc_{col}")
+                    dt_opts["as_utc"] = st.checkbox(
+                        "Parse as UTC", value=dt_opts.get("as_utc", False), key=f"types_dt_utc_{col}"
+                    )
             else:
                 dt_opts = {"fmt": "", "dayfirst": False, "as_utc": False}
             ss.types_dt_opts[col] = dt_opts
 
-            # invalid policy
+            # Invalid-value policy for this column
             pol_map = {"Set as NaN/NaT": "nan", "Drop affected rows": "drop", "Fill with constant": "fill"}
             inv_lbls = list(pol_map.keys())
             curr_policy = ss.types_policy.get(col, "nan")
-            policy_choice = st.selectbox("If a value cannot be parsed", inv_lbls,
-                                         index=inv_lbls.index({"nan":inv_lbls[0],"drop":inv_lbls[1],"fill":inv_lbls[2]}[curr_policy]),
-                                         key=f"types_bad_{col}")
+            policy_choice = st.selectbox(
+                "If a value cannot be parsed",
+                inv_lbls,
+                index=inv_lbls.index({"nan": inv_lbls[0], "drop": inv_lbls[1], "fill": inv_lbls[2]}[curr_policy]),
+                key=f"types_bad_{col}",
+            )
             policy = pol_map[policy_choice]
             ss.types_policy[col] = policy
 
+            # Fill constant (only when policy=fill)
             fill_val = ss.types_fill.get(col, "")
             if policy == "fill" and target not in ("no change",):
-                fill_val = st.text_input("Fill constant", value=fill_val, key=f"types_fill_{col}",
-                                         placeholder="e.g., 0 / 2024-01-01 / Unknown")
+                fill_val = st.text_input(
+                    "Fill constant",
+                    value=fill_val,
+                    key=f"types_fill_{col}",
+                    placeholder="e.g., 0 / 2024-01-01 / Unknown",
+                )
                 ss.types_fill[col] = fill_val
 
+            # Preview button: show original vs converted (first 20 rows)
             if st.button("Preview", key=f"types_prev_btn_{col}"):
                 converted, invalid = _convert(s, target, dt_opts=dt_opts)
                 prev_series = converted.copy()
+
                 if invalid.any() and target not in ("no change",):
                     if policy == "drop":
                         prev_df = pd.concat([s.rename("original"), prev_series.rename("converted")], axis=1)
@@ -275,13 +356,13 @@ def render_eda_types(ss) -> None:
                     elif policy == "fill":
                         if target == "datetime":
                             filler = pd.to_datetime(fill_val, errors="coerce")
-                        elif target in ("float","integer"):
+                        elif target in ("float", "integer"):
                             filler = pd.to_numeric(fill_val, errors="coerce")
                         elif target == "boolean":
                             fv = (fill_val or "").strip().lower()
-                            if fv in _TRUTHY: filler = True
-                            elif fv in _FALSY: filler = False
-                            else: filler = pd.NA
+                            if fv in _TRUTHY:   filler = True
+                            elif fv in _FALSY:  filler = False
+                            else:               filler = pd.NA
                         else:
                             filler = fill_val
                         prev_series = prev_series.mask(invalid, filler)
@@ -294,12 +375,14 @@ def render_eda_types(ss) -> None:
                 st.caption(f"Invalid to fix: **{int(invalid.sum())}**")
                 st.dataframe(prev_df, use_container_width=True)
 
+    # -------- Apply (bulk) --------
     with section("Apply all", expandable=False):
         if st.button("Apply conversions", type="primary"):
             out = df.copy()
             drop_mask_global = pd.Series(False, index=out.index)
+
             for col in [c for c in df.columns if c in ss.types_selected]:
-                target = ss.types_target.get(col, "no change")
+                target  = ss.types_target.get(col, "no change")
                 dt_opts = ss.types_dt_opts.get(col, {"fmt": "", "dayfirst": False, "as_utc": False})
                 policy  = ss.types_policy.get(col, "nan")
                 fill_val = ss.types_fill.get(col, "")
@@ -314,13 +397,13 @@ def render_eda_types(ss) -> None:
                     elif policy == "fill":
                         if target == "datetime":
                             filler = pd.to_datetime(fill_val, errors="coerce")
-                        elif target in ("float","integer"):
+                        elif target in ("float", "integer"):
                             filler = pd.to_numeric(fill_val, errors="coerce")
                         elif target == "boolean":
                             fv = (fill_val or "").strip().lower()
-                            if fv in _TRUTHY: filler = True
-                            elif fv in _FALSY: filler = False
-                            else: filler = pd.NA
+                            if fv in _TRUTHY:   filler = True
+                            elif fv in _FALSY:  filler = False
+                            else:               filler = pd.NA
                         else:
                             filler = fill_val
                         converted = converted.mask(invalid, filler)
@@ -330,6 +413,7 @@ def render_eda_types(ss) -> None:
             if drop_mask_global.any():
                 out = out.loc[~drop_mask_global].reset_index(drop=True)
 
+            # Push to undo stack and save
             ss.df_history.append(df.copy())
             ss.datasets[ss.active_ds] = out
             st.success(f"Applied. New shape: **{out.shape[0]:,} × {out.shape[1]:,}**")

@@ -1,5 +1,6 @@
 # core/preprocess_outliers.py
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -7,14 +8,23 @@ import altair as alt
 from pandas.api.types import is_numeric_dtype
 
 from ui.components import section, kpi_row, render_table
+from core.insights_extractors import (
+    capture_outlier_action,
+    capture_missing_outlier_overview,
+)
 
 # ---------- helpers ----------
 
 def _as_float_series(s: pd.Series) -> pd.Series:
-    """Coerce to numeric float (handles booleans/extension dtypes)"""
+    """Coerce a Series to float, marking non-parsable values as NaN."""
     return pd.to_numeric(s, errors="coerce").astype("float64")
 
-def _iqr_bounds(s: pd.Series, k: float):
+
+def _iqr_bounds(s: pd.Series, k: float) -> tuple[float, float]:
+    """
+    Tukey fences: [Q1 - k*IQR, Q3 + k*IQR].
+    Robust to skew/outliers compared to mean±std.
+    """
     s = _as_float_series(s).dropna()
     if s.empty:
         return (-np.inf, np.inf)
@@ -22,7 +32,9 @@ def _iqr_bounds(s: pd.Series, k: float):
     iqr = q3 - q1
     return (q1 - k * iqr, q3 + k * iqr)
 
-def _zscore_bounds(s: pd.Series, k: float):
+
+def _zscore_bounds(s: pd.Series, k: float) -> tuple[float, float]:
+    """Classical mean±k·std bounds. Sensitive to outliers."""
     s = _as_float_series(s).dropna()
     if s.empty:
         return (-np.inf, np.inf)
@@ -31,7 +43,12 @@ def _zscore_bounds(s: pd.Series, k: float):
         return (-np.inf, np.inf)
     return (mu - k * sd, mu + k * sd)
 
-def _modified_z_bounds(s: pd.Series, k: float):
+
+def _modified_z_bounds(s: pd.Series, k: float) -> tuple[float, float]:
+    """
+    Median±k·(1.4826·MAD) bounds.
+    More robust alternative when distribution is heavy-tailed.
+    """
     s = _as_float_series(s).dropna()
     if s.empty:
         return (-np.inf, np.inf)
@@ -39,10 +56,12 @@ def _modified_z_bounds(s: pd.Series, k: float):
     mad = (s - med).abs().median()
     if pd.isna(mad) or mad == 0:
         return (-np.inf, np.inf)
-    scale = 1.4826 * mad  # consistent with std for normal
+    scale = 1.4826 * mad  # Consistent with std under normality
     return (med - k * scale, med + k * scale)
 
-def _percentile_bounds(s: pd.Series, p_low: float, p_high: float):
+
+def _percentile_bounds(s: pd.Series, p_low: float, p_high: float) -> tuple[float, float]:
+    """Use empirical percentiles as bounds (winsor cutpoints)."""
     s = _as_float_series(s).dropna()
     if s.empty:
         return (-np.inf, np.inf)
@@ -53,7 +72,9 @@ def _percentile_bounds(s: pd.Series, p_low: float, p_high: float):
     lo_v, hi_v = np.nanpercentile(s.to_numpy(), [lo, hi])
     return (lo_v, hi_v)
 
-def _calc_bounds(s: pd.Series, method: str, params: dict[str, float]):
+
+def _calc_bounds(s: pd.Series, method: str, params: dict[str, float]) -> tuple[float, float]:
+    """Route to the selected bounding rule."""
     if method == "IQR (Tukey fences)":
         return _iqr_bounds(s, params.get("k_iqr", 1.5))
     if method == "Z-score (μ ± k·σ)":
@@ -64,7 +85,9 @@ def _calc_bounds(s: pd.Series, method: str, params: dict[str, float]):
         return _percentile_bounds(s, params.get("p_low", 1.0), params.get("p_high", 99.0))
     return (-np.inf, np.inf)
 
-def _apply_action(col: pd.Series, bounds: tuple[float, float], action: str):
+
+def _apply_action(col: pd.Series, bounds: tuple[float, float], action: str) -> pd.Series:
+    """Apply the chosen post-detection action to a single column."""
     lo, hi = bounds
     if action == "Clip to bounds (winsorize)":
         return _as_float_series(col).clip(lo, hi)
@@ -73,14 +96,17 @@ def _apply_action(col: pd.Series, bounds: tuple[float, float], action: str):
         mask = (s < lo) | (s > hi)
         return s.mask(mask)
     if action == "Drop rows with outliers":
-        # handled at frame-level
+        # Applied at frame-level, not here (we only return coerced series)
         return _as_float_series(col)
     return _as_float_series(col)
 
-def _box_plot(df: pd.DataFrame, column: str, title: str):
+
+def _box_plot(df: pd.DataFrame, column: str, title: str) -> None:
+    """Lightweight box-plot (Altair)."""
     plot_df = pd.DataFrame({"value": _as_float_series(df[column])}).dropna()
     if plot_df.empty:
-        return st.caption("No data to plot.")
+        st.caption("No data to plot.")
+        return
     chart = (
         alt.Chart(plot_df)
         .mark_boxplot(size=60)
@@ -89,27 +115,47 @@ def _box_plot(df: pd.DataFrame, column: str, title: str):
     )
     st.altair_chart(chart, use_container_width=True)
 
+
 # ---------- main UI ----------
 
 def render_preprocess_outliers(ss) -> None:
-    """Preprocess ▸ Outliers — multiple methods, preview, box-plot, english summary."""
+    """
+    Preprocess ▸ Outliers
+    - Choose columns, a detection method, and an action (clip, NaN, or drop rows).
+    - Preview effects and visualize via box-plots.
+    - Logs a concise insight after apply.
+    """
+    # Require an active dataset
     if not ss.active_ds or ss.active_ds not in ss.datasets:
         st.info("Pick a dataset to begin.")
         st.stop()
 
     df = ss.datasets[ss.active_ds]
+    # Numeric + boolean (boolean is often an Int/Bool extension dtype)
     num_cols = [c for c in df.columns if is_numeric_dtype(df[c]) or df[c].dtype == "boolean"]
 
     if not num_cols:
         st.info("No numeric/boolean columns found.")
         return
 
-    kpi_row([
-        ("Numeric columns", len(num_cols)),
-        ("Rows", f"{len(df):,}"),
-    ])
+    # Quick glossary (plain English)
+    with st.expander("Key terms (quick guide)", expanded=False):
+        st.markdown(
+            """
+- **Outlier** — A value that is unusually far from the bulk of the data.
+- **IQR / Tukey fences** — Use the middle 50% (IQR) to set bounds: _Q1 − k·IQR_ to _Q3 + k·IQR_. Robust to extremes.
+- **Z-score** — Distance from the mean in standard deviations (μ ± k·σ). Sensitive to heavy tails.
+- **MAD / Modified Z** — Uses median and median absolute deviation; more robust than mean±std.
+- **Percentiles** — Use empirical cutoffs (e.g., 1st and 99th) as bounds.
+- **Winsorize (clip)** — Pull extreme values back to the nearest bound instead of dropping them.
+- **Drop rows** — Remove records containing outliers (can reduce sample size).
+            """
+        )
 
-    # defaults
+    # KPIs
+    kpi_row([("Numeric columns", len(num_cols)), ("Rows", f"{len(df):,}")])
+
+    # Defaults (persisted in session state)
     ss.setdefault("out_cols", num_cols[: min(8, len(num_cols))])
     ss.setdefault("out_method", "IQR (Tukey fences)")
     ss.setdefault("out_action", "Clip to bounds (winsorize)")
@@ -120,8 +166,10 @@ def render_preprocess_outliers(ss) -> None:
     ss.setdefault("out_p_high", 99.0)
     ss.setdefault("out_vis_col", (num_cols[0] if num_cols else None))
 
+    # -------- Setup controls --------
     with section("Setup", expandable=False):
         st.caption("Pick columns, a detection method, and what to do with detected outliers.")
+
         c1, c2 = st.columns([1, 1])
         with c1:
             out_cols = st.multiselect(
@@ -161,7 +209,7 @@ def render_preprocess_outliers(ss) -> None:
                 key="out_action",
             )
 
-        # method params
+        # Method-specific parameters
         if method == "IQR (Tukey fences)":
             st.slider("IQR multiplier (k)", 1.0, 4.0, float(ss.out_k_iqr), step=0.25, key="out_k_iqr")
         elif method == "Z-score (μ ± k·σ)":
@@ -177,17 +225,20 @@ def render_preprocess_outliers(ss) -> None:
             if ss.out_p_high <= ss.out_p_low:
                 st.warning("Upper percentile must be greater than lower percentile.")
 
-    # plain-English plan
+    # Plain-English plan
     param_txt = {
         "IQR (Tukey fences)": f"k={ss.out_k_iqr:.2f}",
         "Z-score (μ ± k·σ)": f"k={ss.out_k_z:.2f}",
         "Modified Z (median ± k·1.4826·MAD)": f"k={ss.out_k_mad:.2f}",
         "Percentiles (p_low / p_high)": f"p_low={ss.out_p_low:.1f}%, p_high={ss.out_p_high:.1f}%",
     }[method]
-    st.info(f"**Plan:** Detect outliers in **{len(out_cols)}** column(s) using **{method}** ({param_txt}); then **{action}**.")
+    st.info(
+        f"**Plan:** Detect outliers in **{len(out_cols)}** column(s) using **{method}** ({param_txt}); "
+        f"then **{action}**."
+    )
 
-    # bounds table
-    def _compute_bounds_for_all():
+    # -------- Bounds preview table --------
+    def _compute_bounds_for_all() -> pd.DataFrame:
         params = dict(
             k_iqr=ss.out_k_iqr,
             k_z=ss.out_k_z,
@@ -209,15 +260,18 @@ def render_preprocess_outliers(ss) -> None:
         else:
             render_table(_compute_bounds_for_all(), height=240)
 
-    # visualization
+    # -------- Visualization (box-plots) --------
     with section("Preview (box plot)", expandable=True):
         vis_options = out_cols or num_cols
         vis_col = st.selectbox("Visualize a single column", options=vis_options, index=0, key="out_vis_col")
         if vis_col:
             _box_plot(df, vis_col, title="Before")
             params = dict(
-                k_iqr=ss.out_k_iqr, k_z=ss.out_k_z, k_mad=ss.out_k_mad,
-                p_low=ss.out_p_low, p_high=ss.out_p_high
+                k_iqr=ss.out_k_iqr,
+                k_z=ss.out_k_z,
+                k_mad=ss.out_k_mad,
+                p_low=ss.out_p_low,
+                p_high=ss.out_p_high,
             )
             lo, hi = _calc_bounds(df[vis_col], method, params)
             s_after = _apply_action(df[vis_col], (lo, hi), action)
@@ -231,11 +285,14 @@ def render_preprocess_outliers(ss) -> None:
                 df_tmp[vis_col] = s_after
                 _box_plot(df_tmp, vis_col, title="After")
 
-    # apply
+    # -------- Apply actions to the whole dataset --------
     def _apply_all(dfin: pd.DataFrame) -> pd.DataFrame:
         params = dict(
-            k_iqr=ss.out_k_iqr, k_z=ss.out_k_z, k_mad=ss.out_k_mad,
-            p_low=ss.out_p_low, p_high=ss.out_p_high
+            k_iqr=ss.out_k_iqr,
+            k_z=ss.out_k_z,
+            k_mad=ss.out_k_mad,
+            p_low=ss.out_p_low,
+            p_high=ss.out_p_high,
         )
         d = dfin.copy()
         if action == "Drop rows with outliers":
@@ -251,15 +308,27 @@ def render_preprocess_outliers(ss) -> None:
             d[c] = _apply_action(s, (lo, hi), action)
         return d
 
+    # Preview / Apply buttons
     cprev, capply = st.columns([1, 1])
     with cprev:
         if st.button("Preview", key="out_preview_btn"):
             prev = _apply_all(df)
-            st.caption(f"Result: **{prev.shape[0]:,} × {prev.shape[1]:,}** (was {df.shape[0]:,} × {df.shape[1]:,})")
+            st.caption(
+                f"Result: **{prev.shape[0]:,} × {prev.shape[1]:,}** "
+                f"(was {df.shape[0]:,} × {df.shape[1]:,})"
+            )
             st.dataframe(prev.head(25), use_container_width=True)
+
     with capply:
         if st.button("Apply", key="out_apply_btn"):
             out = _apply_all(df)
-            ss.df_history.append(df.copy())
+            ss.df_history.append(df.copy())  # enable Undo
             ss.datasets[ss.active_ds] = out
+            # Log preprocessing change to insights (best-effort; never blocks UI)
+            try:
+                ds_name = st.session_state.get("active_ds") or "dataset"
+                capture_outlier_action(st.session_state, ds_name, out_cols, method, action)
+                capture_missing_outlier_overview(st.session_state, ds_name, out)
+            except Exception:
+                pass
             st.success("Outlier handling applied.")

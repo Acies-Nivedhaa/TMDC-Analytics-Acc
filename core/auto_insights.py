@@ -9,20 +9,29 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-# Reuse your table renderer for consistent look & feel
+# Consistent look & feel
 from ui.components import render_table
 
 
 # ------------------ INTERNAL HELPERS (dataset-agnostic) ------------------
 
-def _ai_numeric_cols(df: pd.DataFrame):
+def _ai_numeric_cols(df: pd.DataFrame) -> list[str]:
+    """Return names of numeric columns (per pandas' dtype semantics)."""
     return [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
 
-def _ai_categorical_cols(df: pd.DataFrame, max_card=50):
-    out = []
-    n = len(df)
+
+def _ai_categorical_cols(df: pd.DataFrame, max_card: int = 50) -> list[str]:
+    """
+    Return categorical/text-like columns with bounded cardinality.
+    We allow object/category/string columns whose nunique ∈ (1, max_card].
+    """
+    out: list[str] = []
     for c in df.columns:
-        if pd.api.types.is_object_dtype(df[c]) or pd.api.types.is_categorical_dtype(df[c]) or df[c].dtype == "string":
+        if (
+            pd.api.types.is_object_dtype(df[c])
+            or pd.api.types.is_categorical_dtype(df[c])
+            or df[c].dtype == "string"
+        ):
             try:
                 k = int(pd.Series(df[c]).nunique(dropna=True))
                 if 1 < k <= max_card:
@@ -31,12 +40,16 @@ def _ai_categorical_cols(df: pd.DataFrame, max_card=50):
                 continue
     return out
 
-def _ai_time_col(df: pd.DataFrame):
-    # prefer true datetime column
+
+def _ai_time_col(df: pd.DataFrame) -> str | None:
+    """
+    Heuristic: prefer a real datetime column; otherwise try common name patterns
+    and ensure enough parsable values to be useful.
+    """
     dt_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
     if dt_cols:
         return dt_cols[0]
-    # try common names then coerce
+
     name_hits = sorted(
         [c for c in df.columns if any(k in str(c).lower() for k in ["date", "time", "timestamp", "created", "dt"])],
         key=lambda x: -len(str(x)),
@@ -47,12 +60,16 @@ def _ai_time_col(df: pd.DataFrame):
             return c
     return None
 
-def _ai_choose_metric(df: pd.DataFrame):
-    # choose a numeric metric to “sum/trend” on: high variance + low missingness
+
+def _ai_choose_metric(df: pd.DataFrame) -> str | None:
+    """
+    Choose a numeric 'metric' to sum/trend on: prefer high variance & low missingness.
+    Returns the column name or None if no numeric columns exist.
+    """
     nums = _ai_numeric_cols(df)
     if not nums:
         return None
-    cand = []
+    cand: list[tuple[float, str]] = []
     for c in nums:
         s = pd.to_numeric(df[c], errors="coerce")
         nn = s.notna().sum()
@@ -65,7 +82,12 @@ def _ai_choose_metric(df: pd.DataFrame):
     cand.sort(reverse=True)
     return cand[0][1] if cand else None
 
-def _ai_outlier_counts(df: pd.DataFrame):
+
+def _ai_outlier_counts(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute outlier counts by numeric column using Tukey's fences (IQR).
+    Returns a table sorted by outlier_rate desc.
+    """
     rows = []
     for c in _ai_numeric_cols(df):
         s = pd.to_numeric(df[c], errors="coerce").dropna()
@@ -83,17 +105,16 @@ def _ai_outlier_counts(df: pd.DataFrame):
     out = pd.DataFrame(rows, columns=["column", "outliers", "outlier_rate"])
     return out.sort_values("outlier_rate", ascending=False)
 
-def _ai_missingness(df: pd.DataFrame):
+
+def _ai_missingness(df: pd.DataFrame) -> pd.DataFrame:
+    """Missing rate per column, descending."""
     pct = df.isna().mean().sort_values(ascending=False)
     # Older pandas: use to_frame(...).reset_index() and rename "index"
-    return (
-        pct.to_frame("missing_rate")
-           .reset_index()
-           .rename(columns={"index": "column"})
-    )
+    return pct.to_frame("missing_rate").reset_index().rename(columns={"index": "column"})
 
 
-def _ai_cardinality(df: pd.DataFrame):
+def _ai_cardinality(df: pd.DataFrame) -> pd.DataFrame:
+    """Cardinality and unique_rate per column, sorted by nunique desc."""
     rows = []
     n = len(df)
     for c in df.columns:
@@ -102,9 +123,16 @@ def _ai_cardinality(df: pd.DataFrame):
         except Exception:
             k = np.nan
         rows.append((c, k, (k / n) if n else np.nan))
-    return pd.DataFrame(rows, columns=["column", "nunique", "unique_rate"]).sort_values("nunique", ascending=False)
+    return (
+        pd.DataFrame(rows, columns=["column", "nunique", "unique_rate"])
+        .sort_values("nunique", ascending=False)
+    )
 
-def _ai_correlations(df: pd.DataFrame, topk=10, min_abs=0.6):
+
+def _ai_correlations(df: pd.DataFrame, topk: int = 10, min_abs: float = 0.6) -> pd.DataFrame:
+    """
+    Top absolute correlations among numeric columns only (|r| >= min_abs).
+    """
     nums = _ai_numeric_cols(df)
     if len(nums) < 2:
         return pd.DataFrame(columns=["col_a", "col_b", "corr_abs"])
@@ -122,27 +150,45 @@ def _ai_correlations(df: pd.DataFrame, topk=10, min_abs=0.6):
     out = pd.DataFrame(rows, columns=["col_a", "col_b", "corr_abs"]).sort_values("corr_abs", ascending=False)
     return out.head(topk)
 
-def _ai_top_categories(df: pd.DataFrame, metric_col: str | None, max_show=10):
-    res = {}
-    if metric_col is None:  # fall back to counts
+
+def _ai_top_categories(df: pd.DataFrame, metric_col: str | None, max_show: int = 10) -> dict[str, pd.DataFrame]:
+    """
+    For each low-cardinality categorical column, return:
+      - counts table if metric_col is None, else
+      - sum(metric_col) by category, both limited to top rows.
+    """
+    res: dict[str, pd.DataFrame] = {}
+    if metric_col is None:
         for cat in _ai_categorical_cols(df):
-            t = df[cat].value_counts(dropna=False).head(max_show).rename("count").reset_index().rename(columns={"index": cat})
+            t = (
+                df[cat]
+                .value_counts(dropna=False)
+                .head(max_show)
+                .rename("count")
+                .reset_index()
+                .rename(columns={"index": cat})
+            )
             res[cat] = t
         return res
+
     for cat in _ai_categorical_cols(df):
         g = df.groupby(cat)[metric_col].apply(lambda s: pd.to_numeric(s, errors="coerce").fillna(0).sum())
         g = g.sort_values(ascending=False).head(max_show).reset_index().rename(columns={metric_col: "metric_sum"})
         res[cat] = g
     return res
 
-def _ai_text_glance(df: pd.DataFrame, max_cols=3):
+
+def _ai_text_glance(df: pd.DataFrame, max_cols: int = 3) -> pd.DataFrame:
+    """
+    For up to max_cols text-like columns, show average length and top tokens from a sample.
+    """
     text_cols = [c for c in df.columns if pd.api.types.is_object_dtype(df[c]) or df[c].dtype == "string"]
     out = []
     for c in text_cols[:max_cols]:
         s = df[c].astype(str)
         avg_len = float(s.str.len().mean())
-        tokens = []
-        # lightweight glance on a sample
+        tokens: list[str] = []
+        # Lightweight glance on a sample
         sample_n = min(len(s), 2000)
         if sample_n > 0:
             for v in s.sample(sample_n, random_state=42):
@@ -151,7 +197,12 @@ def _ai_text_glance(df: pd.DataFrame, max_cols=3):
         out.append({"column": c, "avg_len": round(avg_len, 1), "top_tokens": ", ".join([t for t, _ in common])})
     return pd.DataFrame(out)
 
-def _ai_trend(df: pd.DataFrame, time_col: str | None, metric_col: str | None):
+
+def _ai_trend(df: pd.DataFrame, time_col: str | None, metric_col: str | None) -> pd.Series:
+    """
+    Build a coarse monthly trend: sum(metric) by month from (time_col, metric_col).
+    Returns a pandas Series indexed by month (timestamp).
+    """
     if time_col is None or metric_col is None:
         return pd.Series(dtype="float64")
     w = df[[time_col, metric_col]].copy()
@@ -164,7 +215,12 @@ def _ai_trend(df: pd.DataFrame, time_col: str | None, metric_col: str | None):
     ts = w.groupby("__period")[metric_col].sum().sort_index()
     return ts
 
-def _ai_forecast_next(ts: pd.Series):
+
+def _ai_forecast_next(ts: pd.Series) -> tuple[float, float]:
+    """
+    Naive linear projection on the most recent <= 12 points.
+    Returns (next_value, pct_delta_vs_last).
+    """
     if ts is None or len(ts) < 3:
         return (np.nan, np.nan)
     last = ts.tail(12) if len(ts) >= 12 else ts
@@ -175,13 +231,17 @@ def _ai_forecast_next(ts: pd.Series):
     delta = (next_val - last.iloc[-1]) / last.iloc[-1] if last.iloc[-1] != 0 else np.nan
     return (float(next_val), float(delta))
 
-def _pct_fmt(x):
+
+def _pct_fmt(x) -> str:
+    """Format a fraction as a percentage string, fallback to em-dash."""
     try:
         return f"{x*100:.1f}%"
     except Exception:
         return "—"
 
+
 def _ai_build_html(payload: dict) -> str:
+    """Standalone HTML export (compact styling, safe defaults for empty frames)."""
     css = dedent("""
     <style>
       body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111827;padding:24px}
@@ -202,6 +262,7 @@ def _ai_build_html(payload: dict) -> str:
         if df is None or (hasattr(df, "empty") and df.empty):
             return "<p class='muted'>—</p>"
         return df.head(20).to_html(index=False, border=0)
+
     bullets = "".join([f"<li>{b}</li>" for b in payload.get("story", [])]) or "<li class='muted'>Provide more structure to enrich narrative.</li>"
     return f"""
     <html><head><meta charset='utf-8'/>{css}</head><body>
@@ -229,54 +290,56 @@ def _ai_build_html(payload: dict) -> str:
     </body></html>
     """
 
+
 def _ai_build_html_bytes(payload: dict) -> bytes:
+    """Bytes wrapper for download button."""
     return _ai_build_html(payload).encode("utf-8")
 
 
 @st.cache_data(show_spinner=False)
 def _ai_compute(df: pd.DataFrame, cap_rows: int = 200_000):
-    """Compute generalized insights on a copy/sampled slice of the data."""
-    # sample for speed but keep behaviour stable
+    """
+    Compute generalized insights on a copy/sampled slice of the data.
+    Returns: (payload_dict, trend_series, metric_col, time_col, topcats_map)
+    """
+    # Sample for speed but keep behaviour stable
     work = df
     if len(work) > cap_rows:
         work = work.sample(cap_rows, random_state=42)
 
-    # basics
+    # Basics
     miss_overall = float(work.isna().mean().mean())
     dups = int(work.duplicated().sum())
     miss_cols = _ai_missingness(work).head(15)
 
-    # cardinality
+    # Cardinality
     card = _ai_cardinality(work)
     card_high = card[card["unique_rate"] >= 0.5].head(15)
 
-    # numeric quality
+    # Numeric quality
     outliers = _ai_outlier_counts(work).head(15)
 
-    # correlations
+    # Correlations
     corr = _ai_correlations(work, topk=12, min_abs=0.6)
 
-    # time & metric
+    # Time & metric
     time_col = _ai_time_col(work)
     metric_col = _ai_choose_metric(work)
     ts = _ai_trend(work, time_col, metric_col)
-    trend_tbl = ts.tail(12).reset_index().rename(
-        columns={"__period": "period", metric_col or "value": "value"}
-    ) if len(ts) > 0 else pd.DataFrame()
+    trend_tbl = (
+        ts.tail(12).reset_index().rename(columns={"__period": "period", metric_col or "value": "value"})
+        if len(ts) > 0 else pd.DataFrame()
+    )
 
-    # forecast
+    # Forecast
     f_val, f_delta = _ai_forecast_next(ts.tail(12)) if len(ts) > 0 else (np.nan, np.nan)
 
-    # categories
+    # Categories
     topcats_map = _ai_top_categories(work, metric_col)
     # pick one example for HTML preview
-    topcats_any = None
-    for k, v in topcats_map.items():
-        if v is not None and not v.empty:
-            topcats_any = v
-            break
+    topcats_any = next((v for v in topcats_map.values() if v is not None and not v.empty), None)
 
-    # text glance
+    # Text glance
     text_glance = _ai_text_glance(work)
 
     payload = {
@@ -301,12 +364,16 @@ def _ai_compute(df: pd.DataFrame, cap_rows: int = 200_000):
     return payload
 
 
-def _ai_story(miss_overall, outliers_df, corr_df, ts, topcats_any):
-    bullets = []
+def _ai_story(miss_overall, outliers_df, corr_df, ts, topcats_any) -> list[str]:
+    """Generate a short, plain-language narrative from key stats."""
+    bullets: list[str] = []
     if miss_overall > 0.05:
         bullets.append(f"Overall missingness is {_pct_fmt(miss_overall)}; consider imputations.")
     if outliers_df is not None and not outliers_df.empty and outliers_df.iloc[0]["outlier_rate"] >= 0.05:
-        bullets.append(f"Column **{outliers_df.iloc[0]['column']}** shows a high outlier rate ({_pct_fmt(outliers_df.iloc[0]['outlier_rate'])}).")
+        bullets.append(
+            f"Column **{outliers_df.iloc[0]['column']}** shows a high outlier rate "
+            f"({_pct_fmt(outliers_df.iloc[0]['outlier_rate'])})."
+        )
     if corr_df is not None and not corr_df.empty:
         a, b, v = corr_df.iloc[0].tolist()
         bullets.append(f"Strong correlation between **{a}** and **{b}** (|r|={v:.2f}); may indicate redundancy or a causal link.")
@@ -329,7 +396,7 @@ def _ai_story(miss_overall, outliers_df, corr_df, ts, topcats_any):
 
 # ------------------ PUBLIC RENDERER ------------------
 
-def render_auto_insights(ss):
+def render_auto_insights(ss) -> None:
     """
     Streamlit renderer for generalized Auto Insights.
     - Works with ANY tabular dataset (no business-specific columns needed)
@@ -338,11 +405,27 @@ def render_auto_insights(ss):
     """
     st.subheader("Auto Insights")
 
+    # --- Compact glossary (collapsible) ---
+    with st.expander("Key terms (quick guide)", expanded=False):
+        st.markdown(
+            """
+- **Missingness** — Share of blanks/NaN values. High rates can bias analysis.
+- **Duplicates** — Rows that appear more than once. Consider de-duplication.
+- **High cardinality** — Many distinct labels in a column (e.g., IDs). Beware wide one-hot encoding.
+- **Outliers (IQR rule)** — Values far outside the middle 50% (Tukey fences). They can skew means/variances.
+- **Correlation |r|** — Strength of linear relationship between two numeric columns. ~0.1 weak, ~0.3 moderate, ≥0.5 strong (context matters).
+- **Trend (monthly)** — Sum of a chosen numeric metric by month; used for a quick trajectory view.
+- **Naive forecast** — Simple linear trend extrapolation on the latest data; directional, not production-grade.
+- **Top categories** — Most important segments by count or by the chosen metric’s sum.
+- **Text glance** — Quick look at average length and frequent tokens in text-like columns (no heavy NLP).
+            """
+        )
+
     if not ss.datasets:
         st.info("Load a dataset first.")
         return
 
-    # pick dataset (default to active)
+    # Pick dataset (default to active)
     names = sorted(ss.datasets.keys())
     if ss.active_ds not in names:
         ss.active_ds = names[0]
@@ -352,12 +435,12 @@ def render_auto_insights(ss):
         st.warning("Selected dataset is empty.")
         return
 
-# robust slider that works for tiny or huge datasets
+    # Robust slider that works for tiny or huge datasets
     total = int(len(df))
-    cap_max   = int(min(500_000, max(1, total)))
-    min_val   = int(min(50_000, cap_max))                 # if total < 50k, min == max == total
-    default_v = int(max(min_val, min(200_000, cap_max)))  # clamp into [min, max]
-    step_val  = int(max(1, min(50_000, max(1, (cap_max - min_val) // 4))))
+    cap_max = int(min(500_000, max(1, total)))
+    min_val = int(min(50_000, cap_max))  # if total < 50k, min == max == total
+    default_v = int(max(min_val, min(200_000, cap_max)))
+    step_val = int(max(1, min(50_000, max(1, (cap_max - min_val) // 4))))
 
     cap = st.slider(
         "Rows to analyze (sampled if larger)",
@@ -368,11 +451,11 @@ def render_auto_insights(ss):
         key="ai_cap",
     )
 
+    # Compute insights (cached)
     payload_bundle = _ai_compute(df, cap_rows=cap)
-    # Unpack
     payload, ts, metric_col, time_col, topcats_map = payload_bundle
 
-    # Inject dataset name for download
+    # Inject dataset name for HTML export
     payload["dataset"] = ds_name
 
     # KPI row
@@ -382,7 +465,7 @@ def render_auto_insights(ss):
     k3.metric("Duplicates", payload["kpis"]["dups"])
     k4.metric("Next-month forecast", payload["kpis"]["forecast"], delta=_pct_fmt(payload["kpis"]["forecast_delta"]))
 
-    # Tables
+    # Tables: quality + associations
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**Top missing columns**")
@@ -403,7 +486,7 @@ def render_auto_insights(ss):
     else:
         st.caption("No clear time column + numeric metric found to build a trend.")
 
-    # Categories (show up to two as charts)
+    # Categories (show up to two as charts for quick visual)
     st.markdown(f"**Top categories (by {payload['metric']})**")
     shown = 0
     for cat, df_top in topcats_map.items():

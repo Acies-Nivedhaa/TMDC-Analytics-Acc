@@ -1,21 +1,31 @@
 # core/eda_overview.py
 from __future__ import annotations
+"""
+EDA › Overview subtab:
+- Shows high-level KPIs (rows, cols, counts by broad dtype buckets)
+- Displays a compact dtypes table
+- Handles unhashable cells (lists/dicts) safely when counting duplicates
+"""
+
 import json
-import streamlit as st
 import pandas as pd
 import pandas.api.types as ptypes
+import streamlit as st
+
 from ui.components import kpi_row, render_table
 
 
 # ---------------- helpers ----------------
 
 def _type_buckets(df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
-    """Return (numeric_cols, datetime_cols, categorical_cols) names."""
+    """
+    Partition columns into (numeric, datetime, categorical-like).
+    'categorical-like' includes string/categorical/bool, excluding explicit datetimes.
+    """
     num_cols = [c for c in df.columns if ptypes.is_numeric_dtype(df[c])]
     dt_cols = [c for c in df.columns if ptypes.is_datetime64_any_dtype(df[c])]
     cat_cols = [
-        c
-        for c in df.columns
+        c for c in df.columns
         if (ptypes.is_string_dtype(df[c]) or ptypes.is_categorical_dtype(df[c]) or ptypes.is_bool_dtype(df[c]))
         and c not in dt_cols
     ]
@@ -23,7 +33,10 @@ def _type_buckets(df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
 
 
 def _make_hashable(x):
-    """Convert unhashable nested objects (list/dict/set) into stable, hashable forms."""
+    """
+    Convert unhashable nested objects (list/dict/set/tuple) into stable, hashable forms.
+    Note: kept separate for potential reuse; _cell_key uses a lighter path.
+    """
     try:
         hash(x)
         return x
@@ -42,10 +55,34 @@ def _make_hashable(x):
             return str(x)
 
 
+def _cell_key(v):
+    """
+    Fast-ish per-cell key for duplicate detection:
+    - return value as-is if already hashable
+    - else JSON-dump common nested structures; fallback to str
+    """
+    try:
+        hash(v)
+        return v
+    except TypeError:
+        pass
+    try:
+        if isinstance(v, (dict, list, tuple, set)):
+            return json.dumps(v, sort_keys=True, default=str)
+    except Exception:
+        pass
+    return str(v)
+
+
 def _safe_duplicated_count(df: pd.DataFrame) -> int:
+    """
+    Count duplicate rows; if DataFrame contains unhashable objects,
+    fall back to a row-signature approach.
+    """
     try:
         return int(df.duplicated().sum())
     except TypeError:
+        # Create a hashable signature per row; may be slower on very large frames.
         sig = df.applymap(_cell_key).apply(tuple, axis=1)
         return int(sig.duplicated().sum())
     except Exception:
@@ -53,24 +90,13 @@ def _safe_duplicated_count(df: pd.DataFrame) -> int:
 
 
 def _kpis(df: pd.DataFrame) -> dict[str, float | int]:
-    rows = int(len(df)); cols = int(df.shape[1])
+    """Compute simple KPIs used by the top tiles."""
+    rows = int(len(df))
+    cols = int(df.shape[1])
     dups = _safe_duplicated_count(df) if rows else 0
     total_cells = rows * cols
     miss_pct = float((df.isna().sum().sum() / total_cells) * 100) if total_cells else 0.0
     return {"rows": rows, "cols": cols, "dups": dups, "miss_pct": miss_pct}
-
-def _cell_key(v):
-    try:
-        hash(v); return v
-    except TypeError:
-        pass
-    try:
-        if isinstance(v, (dict, list, tuple, set)):
-            import json
-            return json.dumps(v, sort_keys=True, default=str)
-    except Exception:
-        pass
-    return str(v)
 
 
 # ---------------- render ----------------
@@ -78,12 +104,11 @@ def _cell_key(v):
 def render_overview(df: pd.DataFrame) -> None:
     """
     Overview subtab: KPI tiles + Dtypes table. Works with a single dataset.
-    Handles unhashable cells (lists/dicts) safely for duplicate counting.
     """
     k = _kpis(df)
     num_cols, _, cat_cols = _type_buckets(df)
 
-    # KPI row (matches your minimal style)
+    # KPI row (minimal, readable)
     kpi_row([
         ("Rows", f"{k['rows']:,}"),
         ("Columns", f"{k['cols']:,}"),

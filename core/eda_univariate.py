@@ -1,25 +1,31 @@
 # core/eda_univariate.py
 from __future__ import annotations
 
+import json
 import numpy as np
 import pandas as pd
 import pandas.api.types as ptypes
 import streamlit as st
 
-from ui.components import render_table  # already in your project
+from ui.components import render_table
+from core.insights_extractors import (
+    init_insights_store,
+    capture_univariate_insight,
+    save_univariate_all_to_store,
+    saved_badge,
+)
 
 
-# ---------- helpers ----------
+# --------------------------- helpers ---------------------------
 
 def _cell_key(v):
-    """Stable key for lists/dicts/sets etc. (for value_counts on object cols)."""
+    """Stable key for lists/dicts/sets/etc. so value_counts works on object columns."""
     try:
         hash(v)
         return v
     except TypeError:
         pass
     try:
-        import json
         if isinstance(v, (dict, list, tuple, set)):
             return json.dumps(v, sort_keys=True, default=str)
     except Exception:
@@ -28,6 +34,7 @@ def _cell_key(v):
 
 
 def _safe_value_counts(s: pd.Series, top: int | None = None) -> pd.DataFrame:
+    """value_counts that tolerates unhashable objects; returns count + percent."""
     if s.dtype == "object":
         vc = s.map(_cell_key).value_counts(dropna=False)
     else:
@@ -35,8 +42,10 @@ def _safe_value_counts(s: pd.Series, top: int | None = None) -> pd.DataFrame:
             vc = s.value_counts(dropna=False)
         except TypeError:
             vc = s.astype(str).value_counts(dropna=False)
+
     if top:
         vc = vc.head(top)
+
     total = max(1, len(s))
     out = vc.rename_axis("value").reset_index(name="count")
     out["percent"] = (out["count"] / total * 100).round(2)
@@ -44,13 +53,30 @@ def _safe_value_counts(s: pd.Series, top: int | None = None) -> pd.DataFrame:
 
 
 def _numeric_summary(s: pd.Series) -> pd.DataFrame:
-    # (count/mean/std/min/25%/50%/75%/max)
+    """Small numeric summary table using describe (p25/p50/p75 included)."""
     desc = s.describe(percentiles=[0.25, 0.5, 0.75])
     return pd.DataFrame(desc).T
 
 
+def _to_hashable_scalar(x):
+    """Return x if hashable; else a stable JSON/string representation (keeps NaNs as-is)."""
+    try:
+        hash(x)  # will raise for dict/list/set
+        return x
+    except Exception:
+        try:
+            return json.dumps(x, sort_keys=True, ensure_ascii=False)
+        except Exception:
+            return str(x)
+
+
+def _hashable_series(s: pd.Series) -> pd.Series:
+    """Map non-hashable elements to stable strings."""
+    return s.map(_to_hashable_scalar)
+
+
 def _clip_tails(s: pd.Series, mode: str) -> pd.Series:
-    """Winsorize tails by percent on each side."""
+    """Winsorize tails by the given percent on each side (e.g., '0.5%')."""
     if mode == "None":
         return s
     pct = float(mode.replace("%", "")) / 100.0  # e.g. "0.5%" -> 0.005
@@ -59,6 +85,7 @@ def _clip_tails(s: pd.Series, mode: str) -> pd.Series:
 
 
 def _hist_counts(s: pd.Series, bins_rule: str, logx: bool) -> pd.DataFrame:
+    """Return histogram midpoints + counts (supports numpy bin rules)."""
     x = s.dropna().to_numpy()
     if x.size == 0:
         return pd.DataFrame({"bin": [], "count": []})
@@ -68,18 +95,19 @@ def _hist_counts(s: pd.Series, bins_rule: str, logx: bool) -> pd.DataFrame:
     bins = "auto" if bins_rule == "auto" else bins_rule
     counts, edges = np.histogram(x, bins=bins)
     mids = (edges[:-1] + edges[1:]) / 2.0
-    df = pd.DataFrame({"bin": mids, "count": counts})
-    return df
+    return pd.DataFrame({"bin": mids, "count": counts})
 
 
 def _infer_univariate_dtype(s: pd.Series) -> str:
+    """Classify column into {'numeric','datetime','categorical'} for this view."""
     if ptypes.is_numeric_dtype(s):
         return "numeric"
     if ptypes.is_datetime64_any_dtype(s):
         return "datetime"
     return "categorical"
 
-# --- Business insights helpers (Univariate) ---
+
+# --------- Business insight bullets (per selected column) ---------
 
 def _iqr_outlier_share(s: pd.Series) -> float:
     s = pd.to_numeric(s, errors="coerce").dropna()
@@ -92,18 +120,22 @@ def _iqr_outlier_share(s: pd.Series) -> float:
     lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
     return float(((s < lo) | (s > hi)).mean())
 
+
 def _insights_univariate(col_name: str, s_full: pd.Series, kind: str) -> list[str]:
+    """Generate short, business-friendly bullets for the selected column."""
     tips: list[str] = []
-    n = len(s_full)
     miss_pct = float(s_full.isna().mean() * 100)
 
     if miss_pct > 0:
-        tips.append(f"**{miss_pct:.1f}%** values missing in **{col_name}** → consider imputation or data quality checks.")
+        tips.append(
+            f"**{miss_pct:.1f}%** values missing in **{col_name}** → consider imputation or data quality checks."
+        )
 
     if kind == "numeric":
         sn = pd.to_numeric(s_full, errors="coerce").dropna()
         if sn.empty:
             return tips
+
         skew = float(sn.skew())
         if skew > 1:
             tips.append("Right-skewed distribution → try log/yeo-johnson transform or robust statistics.")
@@ -112,7 +144,9 @@ def _insights_univariate(col_name: str, s_full: pd.Series, kind: str) -> list[st
 
         out_share = _iqr_outlier_share(sn) * 100
         if out_share >= 5:
-            tips.append(f"≈ **{out_share:.1f}%** potential outliers (IQR rule) → cap at p1/p99 or investigate upstream causes.")
+            tips.append(
+                f"≈ **{out_share:.1f}%** potential outliers (IQR rule) → cap at p1/p99 or investigate upstream causes."
+            )
 
         mean, std = float(sn.mean()), float(sn.std(ddof=1))
         if mean != 0 and std != 0:
@@ -122,7 +156,7 @@ def _insights_univariate(col_name: str, s_full: pd.Series, kind: str) -> list[st
 
         zero_share = float((sn == 0).mean() * 100)
         if zero_share >= 20:
-            tips.append(f"**{zero_share:.1f}%** zeros → check for sparsity, consider zero-inflated models or two-part features.")
+            tips.append("Many zeros → consider zero-inflated models or two-part features.")
 
     elif kind == "categorical":
         vc = s_full.astype("string").fillna("__NA__").value_counts(dropna=False, normalize=True)
@@ -144,8 +178,9 @@ def _insights_univariate(col_name: str, s_full: pd.Series, kind: str) -> list[st
 
     return tips
 
+
 def _insight_box(title: str, bullets: list[str]) -> None:
-    import streamlit as st
+    """Simple, readable bullet list for the insights panel."""
     st.markdown("----")
     st.markdown(f"**{title}**")
     if not bullets:
@@ -155,20 +190,45 @@ def _insight_box(title: str, bullets: list[str]) -> None:
         st.markdown(f"- {b}")
 
 
-
-# ---------- main renderer ----------
+# ------------------------- main renderer -------------------------
 
 def render_univariate(df: pd.DataFrame, sample_n: int | None = None) -> None:
     """
     Univariate profile for a single column.
     - Works for numeric / categorical / datetime
-    - Handles nested JSON-like values gracefully
+    - Handles nested JSON-like values gracefully for value_counts
     """
     st.markdown("**Univariate**")
 
-    # Column picker (all columns)
+    # Compact, plain-English glossary for this tab
+    with st.expander("Key terms (quick guide)", expanded=False):
+        st.markdown(
+            """
+            - **Univariate Analysis**: Examining one variable at a time
+            - **Histogram**: Shows distribution of numeric values
+            - **Box plot**: Shows quartiles, median, and outliers
+            - **Bar chart**: Shows frequency of categorical values
+            - **Numeric summary** — Core stats for a column: minimum, median (50th percentile), mean (average), maximum, and spread.
+            - **Histogram bins** — How values are grouped into bars on the chart; different rules change bar width/number automatically.
+            - **Log scale (x)** — Plots values on a logarithmic axis so very large and small numbers can be compared more easily.
+            - **Clip tails (winsorize)** — Caps extreme low/high values at chosen percentiles so outliers don’t dominate the view.
+            - **Unique values** — Count of distinct entries in the column; used to judge variety.
+            - **Cardinality** — Another way to say “how many distinct categories”; high cardinality means many unique labels.
+            - **Categorical data** — Text/labels like product, region, or status; we usually show the most frequent categories first.
+            - **Resample frequency** — For dates, how we bucket records (day/week/month/quarter/year) to see trends over time.
+            - **Skewness** — Whether the distribution leans toward low or high values; strong skew may call for a transformation.
+            - **IQR outliers** — Values far outside the middle 50% (Interquartile Range); a standard objective way to flag extremes.
+            - **Coefficient of Variation (CV)** — Standard deviation divided by mean; higher CV = higher relative variability.
+            - **Missing values** — Blank/NaN entries; a high share may need imputation (filling) or upstream data fixes.
+
+            _Notes:_ Outliers aren’t always errors; treat them as prompts to investigate. “Percent” numbers are relative to the non-missing values unless stated otherwise.
+            """
+            )
+
+    init_insights_store(st.session_state)
+
+    # Column picker (prefer a numeric column by default if present)
     cols = df.columns.tolist()
-    # Prefer a numeric column as default if available
     default_col = next((c for c in cols if ptypes.is_numeric_dtype(df[c])), cols[0])
     col = st.selectbox("Pick a column", cols, index=cols.index(default_col), key="uni_col")
 
@@ -176,14 +236,10 @@ def render_univariate(df: pd.DataFrame, sample_n: int | None = None) -> None:
     missing_n = int(s_full.isna().sum())
     st.caption(f"Missing values: {missing_n:,} | Dtype: {s_full.dtype}")
 
-    # optional sampling for speed on huge data
+    # Optional sampling for speed on large datasets
     if sample_n:
-        # robust sample size
         n = min(sample_n, len(s_full))
-        if n < len(s_full):
-            s = s_full.sample(n, random_state=0)
-        else:
-            s = s_full
+        s = s_full.sample(n, random_state=0) if n < len(s_full) else s_full
     else:
         s = s_full
 
@@ -208,7 +264,7 @@ def render_univariate(df: pd.DataFrame, sample_n: int | None = None) -> None:
         hist = _hist_counts(s_num, bins_rule=bins_rule, logx=logx)
         st.bar_chart(hist.set_index("bin")["count"])
 
-        st.caption("Unique values: {} — showing top 100".format(int(s_num.nunique(dropna=False))))
+        st.caption(f"Unique values: {int(s_num.nunique(dropna=False))} — showing top 100")
         top_tbl = _safe_value_counts(s_num, top=100)
         render_table(top_tbl)
 
@@ -219,8 +275,7 @@ def render_univariate(df: pd.DataFrame, sample_n: int | None = None) -> None:
         st.caption(f"Unique values: {nunique:,} — showing top 50")
 
         top_tbl = _safe_value_counts(s, top=50)
-        # Chart first, then table
-        st.bar_chart(top_tbl.set_index("value")["count"])
+        st.bar_chart(top_tbl.set_index("value")["count"])  # chart first, then table
         render_table(top_tbl)
 
     # ---------- DATETIME ----------
@@ -250,17 +305,30 @@ def render_univariate(df: pd.DataFrame, sample_n: int | None = None) -> None:
             return
 
         counts = ts.dt.to_period(rule).value_counts().sort_index()
-        # convert PeriodIndex to timestamp-ish labels
-        idx = counts.index.astype(str)
+        idx = counts.index.astype(str)  # PeriodIndex -> readable labels
         chart_df = pd.DataFrame({"period": idx, "count": counts.values})
         st.bar_chart(chart_df.set_index("period")["count"])
 
         tbl = chart_df.rename(columns={"period": "bucket"})
         render_table(tbl)
 
-                # --- Business insights (auto-updates with the selected column) ---
+    # --- Business insights (auto-updates with the selected column) ---
     insights = _insights_univariate(col, s_full, kind)
     _insight_box("Business insights", insights)
 
+    # --- Save ALL columns' univariate snapshots into the structured store ---
+    st.markdown("---")
+    if st.button("Save insights for ALL columns in this table", type="primary", key="uni_save_all"):
+        ds_name = st.session_state.get("active_ds") or "dataset"
+        n = save_univariate_all_to_store(st.session_state, ds_name, df)
+        st.success(f"Saved univariate insights for {n} column(s) in '{ds_name}'.")
+        saved_badge()
 
-
+    # --- Optional: save THIS column's insight into Final Summary ---
+    ds_name = st.session_state.get("active_ds") or "dataset"
+    if st.checkbox("Save this insight to Final Summary", key=f"uni_save_{col}"):
+        try:
+            capture_univariate_insight(st.session_state, ds_name, col, s_full)
+            saved_badge()
+        except Exception as e:
+            st.warning(f"Could not save insight: {e}")

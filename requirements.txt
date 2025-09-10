@@ -1,17 +1,43 @@
-streamlit>=1.31
-pandas>=2.2
-numpy>=1.26
-altair>=5.2
-matplotlib>=3.8
-seaborn>=0.13
-scikit-learn>=1.4
-scipy>=1.11
-openpyxl>=3.1
-pyarrow>=15.0
-fastparquet>=2024.2
-reportlab>=4.0  
-jinja2>=3.1
-trino
-wordcloud
+# ===============================
+# Runtime: Streamlit app + data
+# ===============================
+streamlit==1.36.0          # UI framework
+pandas==2.2.2              # DataFrames, IO
+numpy==1.26.4              # Numeric base (pandas/scikit-learn compatible)
 
+# ===============================
+# Visualization
+# ===============================
+altair==5.3.0              # Declarative charts used in parts of the UI
+matplotlib==3.8.4          # Fallback charts & exports
+seaborn==0.13.2            # Statistical plots (built on matplotlib)
 
+# ===============================
+# Stats / ML helpers
+# ===============================
+scikit-learn==1.5.1        # Sampling, preprocessing, basic ML utilities
+scipy==1.13.1              # Stats functions used by EDA/outliers
+
+# ===============================
+# File formats (read/write)
+# ===============================
+openpyxl==3.1.5            # Excel .xlsx reader/writer
+xlrd==1.2.0                # Legacy Excel .xls reader (pin: 2.x dropped .xls support)
+pyarrow==16.1.0            # Parquet engine + Arrow tables
+fastparquet==2024.2.0      # Optional second Parquet engine (safe to remove if slimming)
+
+# ===============================
+# Reporting / templating
+# ===============================
+reportlab==4.2.2           # PDF generation for summary exports
+jinja2==3.1.4              # HTML report templates
+
+# ===============================
+# Connectors
+# ===============================
+trino==0.330.0             # DataOS (Trino) connector; used in the Trino tab
+
+# ===============================
+# Nice-to-have / optional visuals
+# ===============================
+wordcloud==1.9.3           # Word clouds (if used in insights/viz)

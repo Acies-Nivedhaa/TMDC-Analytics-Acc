@@ -1,13 +1,19 @@
-# core/summary.py
+# core/overview.py
 from __future__ import annotations
+"""
+Lightweight utilities to summarize a Pandas DataFrame and export the results
+to HTML or PDF. Designed to be UI-friendly (no truncation; scrollable tables).
+"""
+
+from io import BytesIO
+from typing import Dict, List
+import json as _json
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List
-import json as _json
-from io import BytesIO
 
-# ReportLab is optional: only needed for PDF export
+# ReportLab is optional (only needed for PDF export). Keep imports guarded so
+# users without reportlab can still use the app and HTML downloads.
 try:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -33,6 +39,8 @@ __all__ = [
     "build_summary_html",
     "summary_pdf_bytes",
     "summary_html_bytes",
+    # optional capability flag
+    "_REPORTLAB_OK",
 ]
 
 
@@ -41,9 +49,10 @@ __all__ = [
 # =========================
 
 def overview_stats(df: pd.DataFrame) -> Dict[str, float]:
+    """Return quick KPIs for a DataFrame (rows, cols, memory, missing %, duplicates)."""
     n_rows, n_cols = df.shape
     missing = int(df.isna().sum().sum())
-    total   = int(n_rows * n_cols)
+    total = int(n_rows * n_cols)
     missing_pct = (missing / total * 100.0) if total else 0.0
     mem_mb = float(df.memory_usage(deep=True).sum()) / (1024 ** 2)
     n_dup = _n_duplicates_safe(df)
@@ -66,7 +75,11 @@ def _longtables_from_df(
     styles,
     max_cols: int = 8
 ) -> list:
-    """Paginate vertically and split wide frames horizontally to avoid truncation."""
+    """
+    Build a sequence of ReportLab flowables for a DataFrame that may be:
+    - very TALL (paginate automatically), and/or
+    - very WIDE (split horizontally into chunks of <= max_cols).
+    """
     from reportlab.platypus import Paragraph, Spacer
     flow = []
     if df_in is None or df_in.empty:
@@ -81,17 +94,18 @@ def _longtables_from_df(
         part_label = f" (part {i+1})" if parts > 1 else ""
         flow.append(Paragraph(f"{title}{part_label}", styles["Heading3"]))
 
+        # Plain LongTable with subtle styling; header row repeats automatically
         data = [list(sub.columns)] + sub.astype(str).values.tolist()
         tbl = LongTable(
             data,
             repeatRows=1,
             style=TableStyle([
-                ("FONT", (0,0), (-1,-1), "Helvetica", 8),
-                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#f0f2f6")),
-                ("LINEBELOW", (0,0), (-1,0), 0.5, colors.HexColor("#c5cbd3")),
-                ("GRID", (0,0), (-1,-1), 0.25, colors.HexColor("#e4e7ea")),
-                ("ALIGN", (0,0), (-1,-1), "LEFT"),
-                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                ("FONT", (0, 0), (-1, -1), "Helvetica", 8),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f2f6")),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#c5cbd3")),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#e4e7ea")),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ])
         )
         flow += [tbl, Spacer(1, 8)]
@@ -104,20 +118,13 @@ def _longtables_from_df(
 
 def _html_table(df_in: pd.DataFrame, *, max_height_px: int | None = 420, caption: str | None = None) -> str:
     """
-    Scrollable (both directions) HTML table with sticky header.
-    - Horizontal scroll: table uses width:max-content and sits inside an overflow:auto container.
+    Render a scrollable (both axes) HTML table with sticky header.
+    - Horizontal scroll: table uses width:max-content inside an overflow:auto container.
     """
     if df_in is None or df_in.empty:
         return "<div class='empty'>No data</div>"
 
-    html_tbl = df_in.to_html(
-        index=False,
-        border=0,
-        classes="grid",
-        na_rep="—",
-        escape=True,
-    )
-
+    html_tbl = df_in.to_html(index=False, border=0, classes="grid", na_rep="—", escape=True)
     cap = f"<div class='cap'>{caption}</div>" if caption else ""
     mh = f"max-height:{max_height_px}px;" if max_height_px else ""
     return f"""
@@ -141,11 +148,14 @@ def build_summary_html(
     df: pd.DataFrame,
     datasets: dict[str, pd.DataFrame] | None = None,
 ) -> str:
-    """Self-contained HTML report with vertical & horizontal scrolling (no truncation)."""
+    """
+    Self-contained HTML summary with no truncation. All columns are preserved;
+    large tables get scrollbars (L↔R and T↕B).
+    """
     ov = overview_stats(df)
     meta = dataset_meta(df)
 
-    # Datasets in session
+    # Datasets currently loaded in the session (if provided)
     datasets_df = None
     if datasets:
         rows = []
@@ -162,7 +172,7 @@ def build_summary_html(
 
     # Core frames
     schema_tbl = pd.DataFrame({"column": df.columns, "dtype": [str(t) for t in df.dtypes]})
-    preview_df = df.head(20)  # ALL columns; only rows limited to 20
+    preview_df = df.head(20)  # ALL columns; only limit rows
     schema_local = infer_schema(df)
     nunique_tbl = (
         schema_local[["column", "unique"]]
@@ -171,12 +181,16 @@ def build_summary_html(
         .reset_index(drop=True)
     )
     col_stats_tbl = column_quick_stats(df, schema_local)
-    show_cols = [c for c in ["column","type","min","p50","max","mean","std","unique","top","true","false"] if c in col_stats_tbl.columns]
+
+    # Only show columns that exist (keeps table compact across data profiles)
+    show_cols = [c for c in ["column", "type", "min", "p50", "max", "mean", "std", "unique", "top", "true", "false"]
+                 if c in col_stats_tbl.columns]
     if show_cols:
         col_stats_tbl = col_stats_tbl[show_cols]
+
     tips = suggest_actions(df)
 
-    # Sections
+    # Sections: pre-render blocks
     kpi_html = f"""
       <div class="kpi-grid">
         <div class="kpi"><div class="kpi-label">Rows</div><div class="kpi-value">{ov['rows']:,}</div></div>
@@ -191,19 +205,23 @@ def build_summary_html(
     """
 
     datasets_html = _html_table(datasets_df, caption="Datasets in session", max_height_px=260) if (datasets_df is not None and not datasets_df.empty) else ""
-    schema_html   = _html_table(schema_tbl.rename(columns={"column":"Column","dtype":"Dtype"}), caption="Schema (all columns)", max_height_px=360)
+    schema_html   = _html_table(schema_tbl.rename(columns={"column": "Column", "dtype": "Dtype"}), caption="Schema (all columns)", max_height_px=360)
     preview_html  = _html_table(preview_df, caption="Preview (first 20 rows — all columns)", max_height_px=280)
-    card_html     = _html_table(nunique_tbl.rename(columns={"column":"Column","nunique":"Unique"}), caption="Cardinality (nunique per column)", max_height_px=360)
-    stats_html    = _html_table(col_stats_tbl.rename(columns={
-        "column":"Column","type":"Type","min":"Min","p50":"P50","max":"Max","mean":"Mean","std":"Std","unique":"Unique","top":"Top","true":"True","false":"False"
-    }), caption="Schema & Column Summary", max_height_px=360)
+    card_html     = _html_table(nunique_tbl.rename(columns={"column": "Column", "nunique": "Unique"}), caption="Cardinality (nunique per column)", max_height_px=360)
+    stats_html    = _html_table(
+        col_stats_tbl.rename(columns={
+            "column": "Column", "type": "Type", "min": "Min", "p50": "P50", "max": "Max",
+            "mean": "Mean", "std": "Std", "unique": "Unique", "top": "Top", "true": "True", "false": "False"
+        }),
+        caption="Schema & Column Summary", max_height_px=360
+    )
 
     tips_html = (
         "<ul class='tips'>" + "".join(f"<li>{t}</li>" for t in tips) + "</ul>"
         if tips else "<div class='muted'>No immediate issues detected.</div>"
     )
 
-    # Full HTML
+    # Full HTML document
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -313,7 +331,7 @@ def summary_html_bytes(
     *,
     datasets: dict[str, pd.DataFrame] | None = None,
 ) -> bytes:
-    """Return the same HTML as bytes for a download button."""
+    """Return the same HTML as bytes (handy for Streamlit download buttons)."""
     return build_summary_html(dataset_name, df, datasets=datasets).encode("utf-8")
 
 
@@ -326,7 +344,10 @@ def build_summary_pdf(
     df: pd.DataFrame,
     datasets: dict[str, pd.DataFrame] | None = None,
 ) -> bytes:
-    """PDF version – uses LongTable + horizontal chunking."""
+    """
+    PDF export using ReportLab LongTable with horizontal chunking for wide tables.
+    Raises ImportError if reportlab is not installed.
+    """
     if not _REPORTLAB_OK:
         raise ImportError("ReportLab is required for PDF export. Install with: pip install reportlab")
 
@@ -343,7 +364,7 @@ def build_summary_pdf(
     ov = overview_stats(df)
     meta = dataset_meta(df)
 
-    # Datasets overview
+    # Datasets overview (optional)
     datasets_df = None
     if datasets:
         rows = []
@@ -379,15 +400,18 @@ def build_summary_pdf(
     )
     story = []
 
+    # Title block
     story.append(Paragraph(f"Summary — {active_name}", h1))
     story.append(Spacer(1, 6))
     story.append(Paragraph("Analytics Accelerator", small))
     story.append(Spacer(1, 12))
 
+    # Datasets (session)
     if datasets_df is not None and not datasets_df.empty:
         story.append(Paragraph("Datasets (loaded in session)", h2))
         story += _longtables_from_df(datasets_df, "Loaded datasets", styles, max_cols=6)
 
+    # KPIs
     story.append(Paragraph("Active Dataset — KPIs", h2))
     kpi_line = (
         f"<b>Rows:</b> {ov['rows']:,} &nbsp;&nbsp; "
@@ -399,6 +423,7 @@ def build_summary_pdf(
     story.append(Paragraph(kpi_line, small))
     story.append(Spacer(1, 8))
 
+    # Profile & time window
     story.append(Paragraph("Profile & Time Span", h3))
     meta_text = (
         f"<b>Profile:</b> {meta['profile']} &nbsp;&nbsp; "
@@ -409,25 +434,28 @@ def build_summary_pdf(
     story.append(Paragraph(meta_text, small))
     story.append(Spacer(1, 10))
 
+    # Schema
     story.append(Paragraph("Schema (column → dtype)", h2))
     story += _longtables_from_df(schema_tbl, "Schema", styles, max_cols=8)
 
+    # Preview
     if not preview_df.empty:
         story.append(Paragraph("Preview (first 20 rows)", h2))
         story += _longtables_from_df(preview_df, "Preview", styles, max_cols=8)
 
+    # Cardinality
     story.append(Paragraph("Cardinality (nunique per column)", h2))
     story += _longtables_from_df(nunique_tbl, "Cardinality", styles, max_cols=8)
 
+    # Column summary (numeric stats / top / unique / booleans)
     if not col_stats_tbl.empty:
-        show_cols = []
-        for c in ["column", "type", "min", "p50", "max", "mean", "std", "unique", "top", "true", "false"]:
-            if c in col_stats_tbl.columns:
-                show_cols.append(c)
+        show_cols = [c for c in ["column", "type", "min", "p50", "max", "mean", "std", "unique", "top", "true", "false"]
+                     if c in col_stats_tbl.columns]
         stats_clean = col_stats_tbl[show_cols].copy()
         story.append(Paragraph("Schema & Column Summary", h2))
         story += _longtables_from_df(stats_clean, "Column summary", styles, max_cols=8)
 
+    # Suggestions
     story.append(Paragraph("Suggested Actions", h2))
     if tips:
         for t in tips:
@@ -444,7 +472,7 @@ def summary_pdf_bytes(
     dataset_name: str = "dataset",
     datasets: dict[str, pd.DataFrame] | None = None
 ) -> bytes:
-    """Backward-compatible wrapper around `build_summary_pdf(...)`."""
+    """Thin wrapper to keep backward compatibility with earlier call sites."""
     return build_summary_pdf(active_name=dataset_name, df=df, datasets=datasets)
 
 
@@ -453,6 +481,7 @@ def summary_pdf_bytes(
 # =========================
 
 def _is_bool_series(s: pd.Series) -> bool:
+    """Treat {0,1} integer series as boolean, in addition to native bool dtype."""
     try:
         if pd.api.types.is_bool_dtype(s):
             return True
@@ -467,6 +496,10 @@ def _is_bool_series(s: pd.Series) -> bool:
 
 
 def _looks_like_datetime(s: pd.Series) -> bool:
+    """
+    Heuristic: accept native datetime or strings that parse to datetime for most
+    values in a small sample.
+    """
     try:
         if pd.api.types.is_datetime64_any_dtype(s):
             return True
@@ -485,6 +518,10 @@ def _looks_like_datetime(s: pd.Series) -> bool:
 
 
 def infer_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Infer a lightweight logical type per column: numeric / datetime / boolean /
+    categorical / text / nested, and include quick descriptors.
+    """
     rows = []
     for col in df.columns:
         s = df[col]
@@ -501,6 +538,7 @@ def infer_schema(df: pd.DataFrame) -> pd.DataFrame:
         elif _has_unhashable(s):
             ltype = "nested"
         else:
+            # Quick & robust text heuristic: longish strings with many uniques
             try:
                 median_len = s.dropna().astype(str).str.len().median()
             except Exception:
@@ -523,6 +561,13 @@ def infer_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def column_quick_stats(df: pd.DataFrame, schema: pd.DataFrame | None = None) -> pd.DataFrame:
+    """
+    Lightweight, type-aware statistics per column:
+    - numeric: min / p50 / max / mean / std
+    - datetime: min / max
+    - boolean: counts of True/False
+    - other: unique count + modal value
+    """
     if schema is None:
         schema = infer_schema(df)
     out = []
@@ -531,6 +576,7 @@ def column_quick_stats(df: pd.DataFrame, schema: pd.DataFrame | None = None) -> 
         s = df[col]
         t = type_map.get(col, "categorical")
         rec = {"column": col, "type": t}
+
         if t == "numeric":
             vals = s.dropna().astype(float)
             if vals.empty:
@@ -543,7 +589,9 @@ def column_quick_stats(df: pd.DataFrame, schema: pd.DataFrame | None = None) -> 
                     "mean": float(np.nanmean(vals)),
                     "std": float(np.nanstd(vals)),
                 })
+
         elif t == "datetime":
+            # Convert categoricals to string first to avoid parse errors.
             raw = s.astype("string") if pd.api.types.is_categorical_dtype(s) else s
             vals = pd.to_datetime(raw, errors="coerce")
             non_na = vals[vals.notna()]
@@ -551,19 +599,23 @@ def column_quick_stats(df: pd.DataFrame, schema: pd.DataFrame | None = None) -> 
                 "min": str(non_na.min()) if not non_na.empty else None,
                 "max": str(non_na.max()) if not non_na.empty else None,
             })
+
         elif t == "boolean":
             vc = s.dropna().value_counts()
             rec.update({"true": int(vc.get(1, vc.get(True, 0))), "false": int(vc.get(0, vc.get(False, 0)))})
+
         else:
             rec.update({
                 "unique": int(_nunique_safe(s)),
                 "top": (s.dropna().mode().iloc[0] if not _has_unhashable(s) and s.dropna().size else None),
             })
+
         out.append(rec)
     return pd.DataFrame(out)
 
 
 def numeric_correlations(df: pd.DataFrame, top_k: int = 20, min_abs: float = 0.4) -> pd.DataFrame:
+    """Return top numeric↔numeric Pearson correlations (|r| >= min_abs)."""
     num_df = df.select_dtypes(include=[np.number]).copy()
     if num_df.shape[1] < 2:
         return pd.DataFrame(columns=["col_a", "col_b", "corr"])
@@ -580,6 +632,10 @@ def numeric_correlations(df: pd.DataFrame, top_k: int = 20, min_abs: float = 0.4
 
 
 def suggest_actions(df: pd.DataFrame) -> List[str]:
+    """
+    Heuristic checklist of potential data quality or modeling actions.
+    These are safe, human-readable hints (no automatic changes).
+    """
     tips: List[str] = []
     n = len(df)
     schema = infer_schema(df)
@@ -598,6 +654,7 @@ def suggest_actions(df: pd.DataFrame) -> List[str]:
     if dups:
         tips.append(f"{dups:,} duplicate rows detected — consider deduping.")
 
+    # Numeric outlier check via IQR
     num_df = df.select_dtypes(include=[np.number])
     for col in num_df.columns:
         s = num_df[col].dropna().astype(float)
@@ -612,6 +669,7 @@ def suggest_actions(df: pd.DataFrame) -> List[str]:
         if frac >= 0.03:
             tips.append(f"'{col}' shows ~{frac*100:.1f}% outliers by IQR — consider winsorizing or robust scaling.")
 
+    # Textual date stored as string
     for _, r in schema.iterrows():
         if r["type"] == "categorical":
             s = df[r["column"]]
@@ -623,10 +681,17 @@ def suggest_actions(df: pd.DataFrame) -> List[str]:
 
 
 def dataset_meta(df: pd.DataFrame) -> Dict[str, str | int]:
+    """
+    Describe the dataset at a glance:
+    - number of numeric / categorical columns
+    - best-effort time span (min/max across datetime-like columns)
+    - coarse 'profile' (retail / telemetry / cloud-cost / generic)
+    """
     schema = infer_schema(df)
     n_numeric = int((schema["type"] == "numeric").sum())
     n_categorical = int((schema["type"] == "categorical").sum())
 
+    # Aggregate time span across any datetime-like columns
     dt_cols = [c for c in df.columns if _looks_like_datetime(df[c])]
     time_min = None
     time_max = None
@@ -646,6 +711,7 @@ def dataset_meta(df: pd.DataFrame) -> Dict[str, str | int]:
         except Exception:
             continue
 
+    # Very coarse profiling based on column names
     lower_cols = set(c.lower() for c in df.columns)
     if {"order_id", "customer_id", "sku"} <= lower_cols:
         profile = "retail"
@@ -671,9 +737,11 @@ def dataset_meta(df: pd.DataFrame) -> Dict[str, str | int]:
 # =========================
 
 def nunique_safe(s: pd.Series) -> int:
+    """Public wrapper for safe nunique (handles nested objects)."""
     return _nunique_safe(s)
 
 def _has_unhashable(s: pd.Series) -> bool:
+    """Detect lists/dicts/sets/tuples in a sample (break hash-based ops)."""
     try:
         sample = s.dropna().head(200)
         return sample.map(lambda v: isinstance(v, (list, dict, set, tuple))).any()
@@ -681,6 +749,7 @@ def _has_unhashable(s: pd.Series) -> bool:
         return False
 
 def _stable_str(v):
+    """Stringify nested objects deterministically to allow dedup/nunique."""
     try:
         if isinstance(v, (dict, list, tuple, set)):
             return _json.dumps(v, sort_keys=True)
@@ -689,12 +758,14 @@ def _stable_str(v):
         return str(v)
 
 def _nunique_safe(s: pd.Series) -> int:
+    """nunique that tolerates unhashable/nested values by stable-stringifying."""
     try:
         return int(s.nunique(dropna=True))
     except TypeError:
         return int(pd.Series(s.map(_stable_str)).nunique(dropna=True))
 
 def _n_duplicates_safe(df: pd.DataFrame) -> int:
+    """dup-count that tolerates nested columns by stable-stringifying them first."""
     try:
         return int(df.duplicated().sum())
     except TypeError:
@@ -710,6 +781,10 @@ def _n_duplicates_safe(df: pd.DataFrame) -> int:
 # =========================
 
 def demo_data(n_rows: int = 2000, seed: int = 42) -> pd.DataFrame:
+    """
+    Synthetic retail-ish dataset for demos and tests.
+    Produces reasonable distributions and a few duplicates.
+    """
     rng = np.random.default_rng(seed)
     categories = np.array(["Electronics","Home","Beauty","Grocery","Sports","Toys","Books","Fashion","Automotive","Office","Pets","Outdoors"])
     channels = np.array(["web","app","store","email","affiliate","social"])
@@ -724,7 +799,7 @@ def demo_data(n_rows: int = 2000, seed: int = 42) -> pd.DataFrame:
     category    = rng.choice(categories, size=n_rows)
     channel     = rng.choice(channels, size=n_rows)
     region      = rng.choice(regions,  size=n_rows)
-    device      = rng.choice(devices,  size=n_rows, p=[0.55,0.38,0.07])
+    device      = rng.choice(devices,  size=n_rows, p=[0.55, 0.38, 0.07])
 
     start = np.datetime64("2023-01-01")
     order_ts = start + pd.to_timedelta(rng.integers(0, 730*24*3600, size=n_rows), unit="s")
@@ -741,11 +816,11 @@ def demo_data(n_rows: int = 2000, seed: int = 42) -> pd.DataFrame:
     tax_amount = np.round(amount * 0.07, 2)
     amount_plus_tax = np.round(amount + tax_amount, 2)
 
-    user_note = pd.Series(["great fast" if r<0.2 else "ok" for r in rng.random(n_rows)])
+    user_note = pd.Series(["great fast" if r < 0.2 else "ok" for r in rng.random(n_rows)])
 
-    prob = 1/(1+np.exp(-(-1.5 + 0.6*(device=="mobile").astype(int) + 0.4*(promo_used==1).astype(int) - 0.002*base_price)))
+    prob = 1/(1 + np.exp(-(-1.5 + 0.6*(device=="mobile").astype(int) + 0.4*(promo_used==1).astype(int) - 0.002*base_price)))
     repeat_purchase_30d = (rng.random(n_rows) < prob).astype(int)
-    spend_next_30d = np.round(np.clip(prob * rng.normal(180,40,size=n_rows) + (device=="mobile").astype(int)*15, 0, None),2)
+    spend_next_30d = np.round(np.clip(prob * rng.normal(180, 40, size=n_rows) + (device=="mobile").astype(int)*15, 0, None), 2)
 
     df = pd.DataFrame({
         "order_id": order_id,
@@ -755,14 +830,14 @@ def demo_data(n_rows: int = 2000, seed: int = 42) -> pd.DataFrame:
         "channel": channel,
         "region": region,
         "device": device,
-        "utm_campaign": pd.Series(rng.integers(1,81,size=n_rows)).map(lambda x: f"cmp_{int(x):03d}"),
+        "utm_campaign": pd.Series(rng.integers(1, 81, size=n_rows)).map(lambda x: f"cmp_{int(x):03d}"),
         "order_ts": pd.to_datetime(order_ts),
         "event_time_str": event_time_str,
         "quantity": quantity,
         "base_price": base_price,
         "promo_used": promo_used,
         "discount_rate": discount_rate,
-        "promo_price": np.round(promo_price,2),
+        "promo_price": np.round(promo_price, 2),
         "shipping_fee": shipping_fee,
         "amount": amount,
         "tax_amount": tax_amount,
@@ -771,7 +846,9 @@ def demo_data(n_rows: int = 2000, seed: int = 42) -> pd.DataFrame:
         "repeat_purchase_30d": repeat_purchase_30d,
         "spend_next_30d": spend_next_30d,
     })
+
+    # Add ~1% duplicate rows for realism (only when dataset is reasonably sized)
     if n_rows >= 500:
-        dup_idx = rng.choice(n_rows, size=int(n_rows*0.01), replace=False)
+        dup_idx = rng.choice(n_rows, size=int(n_rows * 0.01), replace=False)
         df = pd.concat([df, df.iloc[dup_idx]], ignore_index=True)
     return df
