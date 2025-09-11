@@ -1,43 +1,30 @@
-# ===============================
-# Runtime: Streamlit app + data
-# ===============================
-streamlit==1.36.0          # UI framework
-pandas>=2.2.3               # DataFrames, IO
-numpy==1.26.4              # Numeric base (pandas/scikit-learn compatible)
+# Analytics Accelerator – portable requirements
+# Core app + data handling
+streamlit>=1.34
+pandas>=2.2
+numpy>=1.26
 
-# ===============================
 # Visualization
-# ===============================
-altair==5.3.0              # Declarative charts used in parts of the UI
-matplotlib==3.8.4          # Fallback charts & exports
-seaborn==0.13.2            # Statistical plots (built on matplotlib)
+altair>=5.3
 
-# ===============================
-# Stats / ML helpers
-# ===============================
-scikit-learn==1.5.1        # Sampling, preprocessing, basic ML utilities
-scipy==1.13.1              # Stats functions used by EDA/outliers
+# Stats / clustering (used for outliers, distances)
+scipy>=1.11
 
-# ===============================
-# File formats (read/write)
-# ===============================
-openpyxl==3.1.5            # Excel .xlsx reader/writer
-xlrd==1.2.0                # Legacy Excel .xls reader (pin: 2.x dropped .xls support)
-pyarrow>=18             # Parquet engine + Arrow tables
-fastparquet==2024.2.0      # Optional second Parquet engine (safe to remove if slimming)
+# File formats & large JSON
+pyarrow>=14
+openpyxl>=3.1   # .xlsx reader/writer
+xlrd>=2.0       # .xls support
+ijson>=3.2      # streaming JSON
 
-# ===============================
-# Reporting / templating
-# ===============================
-reportlab==4.2.2           # PDF generation for summary exports
-jinja2==3.1.4              # HTML report templates
+# Connectors (DataOS/Trino tab)
+trino>=0.328.0
 
-# ===============================
-# Connectors
-# ===============================
-trino==0.330.0             # DataOS (Trino) connector; used in the Trino tab
+# Optional but recommended features
+reportlab>=4.0  # PDF export on Final Summary page
+wordcloud>=1.9  # Word cloud in Text Preprocessing (falls back if missing)
+nltk>=3.8       # Lightweight stemming if available (falls back if missing)
 
-# ===============================
-# Nice-to-have / optional visuals
-# ===============================
-wordcloud==1.9.3           # Word clouds (if used in insights/viz)
+# Notes:
+# - This file avoids OS-specific packages and heavy unused deps to stay portable.
+# - If you don't need PDF export or word clouds, you can comment out 'reportlab'/'wordcloud'.
+# - Pandas will use 'openpyxl' for .xlsx and 'xlrd' for .xls automatically.

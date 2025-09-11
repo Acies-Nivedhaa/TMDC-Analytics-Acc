@@ -1,30 +1,1894 @@
 {
-  "icebase.user_engagement.prod_consumer_analytics_events": {
+  "demo": {
     "items": [
+      {
+        "section": "preprocess",
+        "subsection": "missing",
+        "kind": "missing",
+        "title": "Columns with missing values",
+        "text": "discount_rate: 65.7%",
+        "metrics": {
+          "missing_pct": {
+            "discount_rate": 0.6568
+          }
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "preprocess",
+        "subsection": "missing",
+        "kind": "missing",
+        "title": "Columns with missing values",
+        "text": "discount_rate: 65.7%",
+        "metrics": {
+          "missing_pct": {
+            "discount_rate": 0.6568
+          }
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "outliers",
+        "title": "Columns with potential outliers (IQR)",
+        "text": "amount: 5.2%, amount_plus_tax: 5.2%, tax_amount: 5.1%",
+        "metrics": {
+          "outlier_share": {
+            "amount": 0.0516,
+            "amount_plus_tax": 0.0516,
+            "tax_amount": 0.0514
+          }
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "order_id",
+        "text": "Missing 0.0%. Zeros 0.0%. Potential outliers ~0.0%.",
+        "metrics": {
+          "col": "order_id",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.0,
+          "outlier_pct": 0.0
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "customer_id",
+        "text": "Missing 0.0%. Zeros 0.0%. Potential outliers ~0.0%.",
+        "metrics": {
+          "col": "customer_id",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.0,
+          "outlier_pct": 0.0
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "categorical",
+        "title": "sku",
+        "text": "Top category **SKU-0132** covers **0.6%**.",
+        "metrics": {
+          "col": "sku",
+          "top_category": "SKU-0132",
+          "top_share_pct": 0.58
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "categorical",
+        "title": "category",
+        "text": "Top category **Automotive** covers **9.3%**.",
+        "metrics": {
+          "col": "category",
+          "top_category": "Automotive",
+          "top_share_pct": 9.26
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "categorical",
+        "title": "channel",
+        "text": "Top category **email** covers **17.5%**.",
+        "metrics": {
+          "col": "channel",
+          "top_category": "email",
+          "top_share_pct": 17.54
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "categorical",
+        "title": "region",
+        "text": "Top category **East** covers **26.2%**.",
+        "metrics": {
+          "col": "region",
+          "top_category": "East",
+          "top_share_pct": 26.200000000000003
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "categorical",
+        "title": "device",
+        "text": "Top category **desktop** covers **55.2%**.",
+        "metrics": {
+          "col": "device",
+          "top_category": "desktop",
+          "top_share_pct": 55.22
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "categorical",
+        "title": "utm_campaign",
+        "text": "Top category **cmp_068** covers **1.6%**.",
+        "metrics": {
+          "col": "utm_campaign",
+          "top_category": "cmp_068",
+          "top_share_pct": 1.6199999999999999
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "datetime",
+        "title": "order_ts",
+        "text": "Time span ≈ 729 days. Busiest day: Monday (14.8%).",
+        "metrics": {
+          "col": "order_ts",
+          "span_days": 729,
+          "busiest_day": "Monday",
+          "busiest_share": 0.1484
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "categorical",
+        "title": "event_time_str",
+        "text": "Top category **2024-01-30 09:29:17** covers **0.0%**.",
+        "metrics": {
+          "col": "event_time_str",
+          "top_category": "2024-01-30 09:29:17",
+          "top_share_pct": 0.04
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "quantity",
+        "text": "Missing 0.0%. Zeros 0.0%. Potential outliers ~0.0%.",
+        "metrics": {
+          "col": "quantity",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.0,
+          "outlier_pct": 0.0
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "base_price",
+        "text": "Missing 0.0%. Zeros 0.0%. Potential outliers ~4.7%.",
+        "metrics": {
+          "col": "base_price",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.0,
+          "outlier_pct": 0.0466
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "promo_used",
+        "text": "Missing 0.0%. Zeros 65.7%. Potential outliers ~0.0%.",
+        "metrics": {
+          "col": "promo_used",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.6568,
+          "outlier_pct": 0.0
+        },
+        "ts": 1757588316
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "discount_rate",
+        "text": "Missing 65.7%. Zeros 1.1%. Potential outliers ~0.2%.",
+        "metrics": {
+          "col": "discount_rate",
+          "missing_pct": 0.6568,
+          "zeros_pct": 0.011199999999999998,
+          "outlier_pct": 0.0018
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "promo_price",
+        "text": "Missing 0.0%. Zeros 0.0%. Potential outliers ~4.7%.",
+        "metrics": {
+          "col": "promo_price",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.0,
+          "outlier_pct": 0.046799999999999994
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "shipping_fee",
+        "text": "Missing 0.0%. Zeros 2.1%. Potential outliers ~0.4%.",
+        "metrics": {
+          "col": "shipping_fee",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.021399999999999995,
+          "outlier_pct": 0.0044
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "amount",
+        "text": "Missing 0.0%. Zeros 0.0%. Potential outliers ~5.2%.",
+        "metrics": {
+          "col": "amount",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.0,
+          "outlier_pct": 0.0516
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "tax_amount",
+        "text": "Missing 0.0%. Zeros 0.0%. Potential outliers ~5.1%.",
+        "metrics": {
+          "col": "tax_amount",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.0,
+          "outlier_pct": 0.05140000000000001
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "amount_plus_tax",
+        "text": "Missing 0.0%. Zeros 0.0%. Potential outliers ~5.2%.",
+        "metrics": {
+          "col": "amount_plus_tax",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.0,
+          "outlier_pct": 0.0516
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "categorical",
+        "title": "user_note",
+        "text": "Top category **ok** covers **80.7%**.",
+        "metrics": {
+          "col": "user_note",
+          "top_category": "ok",
+          "top_share_pct": 80.7
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "repeat_purchase_30d",
+        "text": "Missing 0.0%. Zeros 76.7%. Potential outliers ~0.0%.",
+        "metrics": {
+          "col": "repeat_purchase_30d",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.7666,
+          "outlier_pct": 0.0
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "univariate",
+        "kind": "numeric",
+        "title": "spend_next_30d",
+        "text": "Missing 0.0%. Zeros 0.0%. Potential outliers ~0.3%.",
+        "metrics": {
+          "col": "spend_next_30d",
+          "missing_pct": 0.0,
+          "zeros_pct": 0.0,
+          "outlier_pct": 0.0026
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "amount ↔ amount_plus_tax",
+        "text": "Pearson r = 1.00 (strong).",
+        "metrics": {
+          "a": "amount",
+          "b": "amount_plus_tax",
+          "r": 0.9999999996028951,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "tax_amount ↔ amount_plus_tax",
+        "text": "Pearson r = 1.00 (strong).",
+        "metrics": {
+          "a": "tax_amount",
+          "b": "amount_plus_tax",
+          "r": 0.9999999189602439,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "amount ↔ tax_amount",
+        "text": "Pearson r = 1.00 (strong).",
+        "metrics": {
+          "a": "amount",
+          "b": "tax_amount",
+          "r": 0.999999907217494,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "base_price ↔ promo_price",
+        "text": "Pearson r = 0.97 (strong).",
+        "metrics": {
+          "a": "base_price",
+          "b": "promo_price",
+          "r": 0.9719190826482976,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "promo_price ↔ amount",
+        "text": "Pearson r = 0.77 (strong).",
+        "metrics": {
+          "a": "promo_price",
+          "b": "amount",
+          "r": 0.7696576558892452,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "promo_price ↔ amount_plus_tax",
+        "text": "Pearson r = 0.77 (strong).",
+        "metrics": {
+          "a": "promo_price",
+          "b": "amount_plus_tax",
+          "r": 0.7696575879588562,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "promo_price ↔ tax_amount",
+        "text": "Pearson r = 0.77 (strong).",
+        "metrics": {
+          "a": "promo_price",
+          "b": "tax_amount",
+          "r": 0.7696565507928588,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "base_price ↔ amount",
+        "text": "Pearson r = 0.74 (strong).",
+        "metrics": {
+          "a": "base_price",
+          "b": "amount",
+          "r": 0.7446024461200311,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "base_price ↔ amount_plus_tax",
+        "text": "Pearson r = 0.74 (strong).",
+        "metrics": {
+          "a": "base_price",
+          "b": "amount_plus_tax",
+          "r": 0.7446023642688399,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "base_price ↔ tax_amount",
+        "text": "Pearson r = 0.74 (strong).",
+        "metrics": {
+          "a": "base_price",
+          "b": "tax_amount",
+          "r": 0.7446011304082785,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "quantity ↔ tax_amount",
+        "text": "Pearson r = 0.53 (weak/moderate).",
+        "metrics": {
+          "a": "quantity",
+          "b": "tax_amount",
+          "r": 0.5257313992423148,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "quantity ↔ amount_plus_tax",
+        "text": "Pearson r = 0.53 (weak/moderate).",
+        "metrics": {
+          "a": "quantity",
+          "b": "amount_plus_tax",
+          "r": 0.5257256149511226,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "quantity ↔ amount",
+        "text": "Pearson r = 0.53 (weak/moderate).",
+        "metrics": {
+          "a": "quantity",
+          "b": "amount",
+          "r": 0.5257252068566476,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "promo_used ↔ spend_next_30d",
+        "text": "Pearson r = 0.29 (weak/moderate).",
+        "metrics": {
+          "a": "promo_used",
+          "b": "spend_next_30d",
+          "r": 0.29447964566054263,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "discount_rate ↔ promo_price",
+        "text": "Pearson r = -0.19 (weak/moderate).",
+        "metrics": {
+          "a": "discount_rate",
+          "b": "promo_price",
+          "r": -0.19463003039848695,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "promo_used ↔ promo_price",
+        "text": "Pearson r = -0.19 (weak/moderate).",
+        "metrics": {
+          "a": "promo_used",
+          "b": "promo_price",
+          "r": -0.18617197849553832,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "repeat_purchase_30d ↔ spend_next_30d",
+        "text": "Pearson r = 0.16 (weak/moderate).",
+        "metrics": {
+          "a": "repeat_purchase_30d",
+          "b": "spend_next_30d",
+          "r": 0.1618200810960438,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "promo_used ↔ amount",
+        "text": "Pearson r = -0.16 (weak/moderate).",
+        "metrics": {
+          "a": "promo_used",
+          "b": "amount",
+          "r": -0.15618152386356243,
+          "method": "pearson"
+        },
+        "ts": 1757588317
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "promo_used ↔ amount_plus_tax",
+        "text": "Pearson r = -0.16 (weak/moderate).",
+        "metrics": {
+          "a": "promo_used",
+          "b": "amount_plus_tax",
+          "r": -0.15618126390055714,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "promo_used ↔ tax_amount",
+        "text": "Pearson r = -0.16 (weak/moderate).",
+        "metrics": {
+          "a": "promo_used",
+          "b": "tax_amount",
+          "r": -0.15617753662775904,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "discount_rate ↔ tax_amount",
+        "text": "Pearson r = -0.15 (weak/moderate).",
+        "metrics": {
+          "a": "discount_rate",
+          "b": "tax_amount",
+          "r": -0.15076202516096232,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "discount_rate ↔ amount_plus_tax",
+        "text": "Pearson r = -0.15 (weak/moderate).",
+        "metrics": {
+          "a": "discount_rate",
+          "b": "amount_plus_tax",
+          "r": -0.1507390431446833,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "discount_rate ↔ amount",
+        "text": "Pearson r = -0.15 (weak/moderate).",
+        "metrics": {
+          "a": "discount_rate",
+          "b": "amount",
+          "r": -0.15073743290336658,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "promo_price ↔ spend_next_30d",
+        "text": "Pearson r = -0.12 (weak/moderate).",
+        "metrics": {
+          "a": "promo_price",
+          "b": "spend_next_30d",
+          "r": -0.12087670880690024,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "amount ↔ spend_next_30d",
+        "text": "Pearson r = -0.09 (weak/moderate).",
+        "metrics": {
+          "a": "amount",
+          "b": "spend_next_30d",
+          "r": -0.08941149149491544,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "amount_plus_tax ↔ spend_next_30d",
+        "text": "Pearson r = -0.09 (weak/moderate).",
+        "metrics": {
+          "a": "amount_plus_tax",
+          "b": "spend_next_30d",
+          "r": -0.08941124649277221,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "tax_amount ↔ spend_next_30d",
+        "text": "Pearson r = -0.09 (weak/moderate).",
+        "metrics": {
+          "a": "tax_amount",
+          "b": "spend_next_30d",
+          "r": -0.08940773873480731,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "promo_used ↔ repeat_purchase_30d",
+        "text": "Pearson r = 0.08 (weak/moderate).",
+        "metrics": {
+          "a": "promo_used",
+          "b": "repeat_purchase_30d",
+          "r": 0.0811494944219283,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "base_price ↔ spend_next_30d",
+        "text": "Pearson r = -0.08 (weak/moderate).",
+        "metrics": {
+          "a": "base_price",
+          "b": "spend_next_30d",
+          "r": -0.07534921146867089,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "correlation",
+        "title": "amount ↔ repeat_purchase_30d",
+        "text": "Pearson r = -0.05 (weak/moderate).",
+        "metrics": {
+          "a": "amount",
+          "b": "repeat_purchase_30d",
+          "r": -0.04682911211820625,
+          "method": "pearson"
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → quantity",
+        "text": "Top 20% of **category** groups contribute **27.4%** of total **quantity**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "quantity",
+          "share20": 0.2740937811772531,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Automotive",
+              0.09191885600266046
+            ],
+            [
+              "Electronics",
+              0.09125374127036914
+            ],
+            [
+              "Sports",
+              0.09092118390422348
+            ],
+            [
+              "Beauty",
+              0.09078816095776522
+            ],
+            [
+              "Office",
+              0.0865979381443299
+            ]
+          ]
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → base_price",
+        "text": "Top 20% of **category** groups contribute **27.4%** of total **base_price**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "base_price",
+          "share20": 0.27375262383287746,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Electronics",
+              0.09328457036411071
+            ],
+            [
+              "Office",
+              0.09233515388785232
+            ],
+            [
+              "Automotive",
+              0.08813289958091439
+            ],
+            [
+              "Outdoors",
+              0.08530566574891776
+            ],
+            [
+              "Sports",
+              0.08453165063366604
+            ]
+          ]
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → promo_price",
+        "text": "Top 20% of **category** groups contribute **27.6%** of total **promo_price**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "promo_price",
+          "share20": 0.275676616005,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Electronics",
+              0.09380674869234595
+            ],
+            [
+              "Office",
+              0.09301180565601061
+            ],
+            [
+              "Automotive",
+              0.08885806165664344
+            ],
+            [
+              "Outdoors",
+              0.0853887585987541
+            ],
+            [
+              "Sports",
+              0.08481498500950393
+            ]
+          ]
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → amount",
+        "text": "Top 20% of **category** groups contribute **27.8%** of total **amount**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "amount",
+          "share20": 0.2775663574649666,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Electronics",
+              0.09680371252221125
+            ],
+            [
+              "Office",
+              0.09127008582383739
+            ],
+            [
+              "Automotive",
+              0.08949255911891799
+            ],
+            [
+              "Sports",
+              0.08713096207515011
+            ],
+            [
+              "Beauty",
+              0.08562625323531887
+            ]
+          ]
+        },
+        "ts": 1757588318
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → tax_amount",
+        "text": "Top 20% of **category** groups contribute **27.8%** of total **tax_amount**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "tax_amount",
+          "share20": 0.2775659662594567,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Electronics",
+              0.09680453347073534
+            ],
+            [
+              "Office",
+              0.09126694440363976
+            ],
+            [
+              "Automotive",
+              0.08949448838508155
+            ],
+            [
+              "Sports",
+              0.08713071658077799
+            ],
+            [
+              "Beauty",
+              0.08562695008066899
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → amount_plus_tax",
+        "text": "Top 20% of **category** groups contribute **27.8%** of total **amount_plus_tax**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "amount_plus_tax",
+          "share20": 0.27756633187188035,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Electronics",
+              0.09680376622954899
+            ],
+            [
+              "Office",
+              0.09126988030874049
+            ],
+            [
+              "Automotive",
+              0.08949268533359087
+            ],
+            [
+              "Sports",
+              0.08713094601464356
+            ],
+            [
+              "Beauty",
+              0.08562629882369313
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → spend_next_30d",
+        "text": "Top 20% of **category** groups contribute **26.9%** of total **spend_next_30d**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "spend_next_30d",
+          "share20": 0.2692795617801815,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Beauty",
+              0.09017699676134047
+            ],
+            [
+              "Electronics",
+              0.08967930086181053
+            ],
+            [
+              "Outdoors",
+              0.08942326415703049
+            ],
+            [
+              "Automotive",
+              0.08862552132579701
+            ],
+            [
+              "Sports",
+              0.08804293960396731
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → order_id",
+        "text": "Top 20% of **category** groups contribute **27.2%** of total **order_id**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "order_id",
+          "share20": 0.2721376159887219,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Automotive",
+              0.0933579241092841
+            ],
+            [
+              "Sports",
+              0.08964508902487126
+            ],
+            [
+              "Electronics",
+              0.08913460285456651
+            ],
+            [
+              "Beauty",
+              0.08867046109449052
+            ],
+            [
+              "Office",
+              0.08754588657230512
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → customer_id",
+        "text": "Top 20% of **category** groups contribute **27.2%** of total **customer_id**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "customer_id",
+          "share20": 0.27246620242973724,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Automotive",
+              0.09284107156711703
+            ],
+            [
+              "Sports",
+              0.09217504506510636
+            ],
+            [
+              "Outdoors",
+              0.08745008579751384
+            ],
+            [
+              "Office",
+              0.08707807825660258
+            ],
+            [
+              "Electronics",
+              0.08675594713301285
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → promo_used",
+        "text": "Top 20% of **category** groups contribute **27.7%** of total **promo_used**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "promo_used",
+          "share20": 0.2768065268065268,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Toys",
+              0.0979020979020979
+            ],
+            [
+              "Beauty",
+              0.09090909090909091
+            ],
+            [
+              "Sports",
+              0.087995337995338
+            ],
+            [
+              "Books",
+              0.08741258741258741
+            ],
+            [
+              "Automotive",
+              0.08682983682983683
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → discount_rate",
+        "text": "Top 20% of **category** groups contribute **27.2%** of total **discount_rate**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "discount_rate",
+          "share20": 0.27180039296811914,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Toys",
+              0.09232446418239044
+            ],
+            [
+              "Outdoors",
+              0.09003979493117807
+            ],
+            [
+              "Books",
+              0.08943613385455063
+            ],
+            [
+              "Beauty",
+              0.08929200317608836
+            ],
+            [
+              "Fashion",
+              0.08777227926035357
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → shipping_fee",
+        "text": "Top 20% of **category** groups contribute **27.5%** of total **shipping_fee**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "shipping_fee",
+          "share20": 0.27545224417062447,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Electronics",
+              0.09248518057218663
+            ],
+            [
+              "Sports",
+              0.09169367607603383
+            ],
+            [
+              "Automotive",
+              0.09127338752240398
+            ],
+            [
+              "Beauty",
+              0.08808633841874693
+            ],
+            [
+              "Outdoors",
+              0.08753786018712355
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "category → repeat_purchase_30d",
+        "text": "Top 20% of **category** groups contribute **27.2%** of total **repeat_purchase_30d**. ~**10** groups cover 80%.",
+        "metrics": {
+          "cat": "category",
+          "val": "repeat_purchase_30d",
+          "share20": 0.2724935732647815,
+          "n_groups_80": 10,
+          "top": [
+            [
+              "Electronics",
+              0.09254498714652956
+            ],
+            [
+              "Outdoors",
+              0.09168808911739502
+            ],
+            [
+              "Toys",
+              0.08826049700085689
+            ],
+            [
+              "Automotive",
+              0.08826049700085689
+            ],
+            [
+              "Sports",
+              0.08740359897172237
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → quantity",
+        "text": "Top 20% of **channel** groups contribute **34.7%** of total **quantity**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "quantity",
+          "share20": 0.34705686730961094,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.17605586963751246
+            ],
+            [
+              "social",
+              0.17100099767209845
+            ],
+            [
+              "app",
+              0.1696707682075158
+            ],
+            [
+              "affiliate",
+              0.16621217159960094
+            ],
+            [
+              "web",
+              0.1615563684735617
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → base_price",
+        "text": "Top 20% of **channel** groups contribute **35.3%** of total **base_price**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "base_price",
+          "share20": 0.35301617829489834,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.18059547006521606
+            ],
+            [
+              "app",
+              0.17242070822968228
+            ],
+            [
+              "social",
+              0.165153840529072
+            ],
+            [
+              "affiliate",
+              0.16364509369012561
+            ],
+            [
+              "store",
+              0.16098237178157968
+            ]
+          ]
+        },
+        "ts": 1757588319
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → promo_price",
+        "text": "Top 20% of **channel** groups contribute **35.3%** of total **promo_price**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "promo_price",
+          "share20": 0.35343935291383444,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.18125621161140146
+            ],
+            [
+              "app",
+              0.17218314130243298
+            ],
+            [
+              "social",
+              0.16463704909388832
+            ],
+            [
+              "affiliate",
+              0.16268877487109648
+            ],
+            [
+              "store",
+              0.1625701200793103
+            ]
+          ]
+        },
+        "ts": 1757588320
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → amount",
+        "text": "Top 20% of **channel** groups contribute **35.3%** of total **amount**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "amount",
+          "share20": 0.35334787016416846,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.18194595763437818
+            ],
+            [
+              "app",
+              0.17140191252979028
+            ],
+            [
+              "affiliate",
+              0.1673813984358419
+            ],
+            [
+              "social",
+              0.16529883073534052
+            ],
+            [
+              "store",
+              0.15764381894762525
+            ]
+          ]
+        },
+        "ts": 1757588320
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → tax_amount",
+        "text": "Top 20% of **channel** groups contribute **35.3%** of total **tax_amount**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "tax_amount",
+          "share20": 0.3533483411715609,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.18194257302153422
+            ],
+            [
+              "app",
+              0.1714057681500267
+            ],
+            [
+              "affiliate",
+              0.16738089361510686
+            ],
+            [
+              "social",
+              0.16530221605470827
+            ],
+            [
+              "store",
+              0.15764568328291367
+            ]
+          ]
+        },
+        "ts": 1757588320
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → amount_plus_tax",
+        "text": "Top 20% of **channel** groups contribute **35.3%** of total **amount_plus_tax**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "amount_plus_tax",
+          "share20": 0.35334790097798,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.1819457362093561
+            ],
+            [
+              "app",
+              0.1714021647686239
+            ],
+            [
+              "affiliate",
+              0.16738136540992504
+            ],
+            [
+              "social",
+              0.16529905220658417
+            ],
+            [
+              "store",
+              0.15764394091445025
+            ]
+          ]
+        },
+        "ts": 1757588320
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → spend_next_30d",
+        "text": "Top 20% of **channel** groups contribute **35.6%** of total **spend_next_30d**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "spend_next_30d",
+          "share20": 0.35629087324440256,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.18149453965992254
+            ],
+            [
+              "app",
+              0.17479633358448
+            ],
+            [
+              "social",
+              0.16657239784726877
+            ],
+            [
+              "web",
+              0.16291490975792827
+            ],
+            [
+              "affiliate",
+              0.15742558478745755
+            ]
+          ]
+        },
+        "ts": 1757588320
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → order_id",
+        "text": "Top 20% of **channel** groups contribute **34.8%** of total **order_id**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "order_id",
+          "share20": 0.3481270504598437,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "app",
+              0.17503217323640208
+            ],
+            [
+              "email",
+              0.1730948772234416
+            ],
+            [
+              "social",
+              0.16617690259376708
+            ],
+            [
+              "affiliate",
+              0.16615667051790375
+            ],
+            [
+              "web",
+              0.16071927521329019
+            ]
+          ]
+        },
+        "ts": 1757588320
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → customer_id",
+        "text": "Top 20% of **channel** groups contribute **34.7%** of total **customer_id**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "customer_id",
+          "share20": 0.34654175059171566,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.1761380135885528
+            ],
+            [
+              "social",
+              0.17040373700316286
+            ],
+            [
+              "app",
+              0.1701530450308478
+            ],
+            [
+              "web",
+              0.1653520116317851
+            ],
+            [
+              "affiliate",
+              0.16073647820098283
+            ]
+          ]
+        },
+        "ts": 1757588320
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → promo_used",
+        "text": "Top 20% of **channel** groups contribute **35.1%** of total **promo_used**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "promo_used",
+          "share20": 0.3513986013986014,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "affiliate",
+              0.175990675990676
+            ],
+            [
+              "email",
+              0.1754079254079254
+            ],
+            [
+              "social",
+              0.17016317016317017
+            ],
+            [
+              "app",
+              0.16958041958041958
+            ],
+            [
+              "web",
+              0.16025641025641027
+            ]
+          ]
+        },
+        "ts": 1757588320
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → discount_rate",
+        "text": "Top 20% of **channel** groups contribute **35.1%** of total **discount_rate**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "discount_rate",
+          "share20": 0.3513427654161264,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.17583110201490124
+            ],
+            [
+              "affiliate",
+              0.17551166340122518
+            ],
+            [
+              "social",
+              0.17383301292582998
+            ],
+            [
+              "app",
+              0.16947614035097275
+            ],
+            [
+              "web",
+              0.16592526186616877
+            ]
+          ]
+        },
+        "ts": 1757588320
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → shipping_fee",
+        "text": "Top 20% of **channel** groups contribute **34.4%** of total **shipping_fee**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "shipping_fee",
+          "share20": 0.3444049378396901,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.1727095525679497
+            ],
+            [
+              "social",
+              0.1716953852717404
+            ],
+            [
+              "app",
+              0.16658615865275317
+            ],
+            [
+              "store",
+              0.16492169580255583
+            ],
+            [
+              "web",
+              0.16314406550225483
+            ]
+          ]
+        },
+        "ts": 1757588321
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "channel → repeat_purchase_30d",
+        "text": "Top 20% of **channel** groups contribute **34.3%** of total **repeat_purchase_30d**. ~**5** groups cover 80%.",
+        "metrics": {
+          "cat": "channel",
+          "val": "repeat_purchase_30d",
+          "share20": 0.3427592116538132,
+          "n_groups_80": 5,
+          "top": [
+            [
+              "email",
+              0.17309340188517566
+            ],
+            [
+              "social",
+              0.16966580976863754
+            ],
+            [
+              "affiliate",
+              0.168808911739503
+            ],
+            [
+              "store",
+              0.16538131962296487
+            ],
+            [
+              "app",
+              0.16281062553556128
+            ]
+          ]
+        },
+        "ts": 1757588321
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "region → quantity",
+        "text": "Top 20% of **region** groups contribute **26.0%** of total **quantity**. ~**4** groups cover 80%.",
+        "metrics": {
+          "cat": "region",
+          "val": "quantity",
+          "share20": 0.25966079148653143,
+          "n_groups_80": 4,
+          "top": [
+            [
+              "East",
+              0.25966079148653143
+            ],
+            [
+              "North",
+              0.25613568340538745
+            ],
+            [
+              "South",
+              0.24230129697372796
+            ],
+            [
+              "West",
+              0.24190222813435316
+            ]
+          ]
+        },
+        "ts": 1757588321
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "region → base_price",
+        "text": "Top 20% of **region** groups contribute **26.2%** of total **base_price**. ~**4** groups cover 80%.",
+        "metrics": {
+          "cat": "region",
+          "val": "base_price",
+          "share20": 0.2624945737271151,
+          "n_groups_80": 4,
+          "top": [
+            [
+              "North",
+              0.2624945737271151
+            ],
+            [
+              "East",
+              0.25989418621579374
+            ],
+            [
+              "West",
+              0.24127070373397289
+            ],
+            [
+              "South",
+              0.2363405363231183
+            ]
+          ]
+        },
+        "ts": 1757588321
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "region → promo_price",
+        "text": "Top 20% of **region** groups contribute **26.2%** of total **promo_price**. ~**4** groups cover 80%.",
+        "metrics": {
+          "cat": "region",
+          "val": "promo_price",
+          "share20": 0.26154297942072,
+          "n_groups_80": 4,
+          "top": [
+            [
+              "North",
+              0.26154297942072
+            ],
+            [
+              "East",
+              0.25979163689738766
+            ],
+            [
+              "West",
+              0.24245646928069306
+            ],
+            [
+              "South",
+              0.23620891440119932
+            ]
+          ]
+        },
+        "ts": 1757588321
+      },
+      {
+        "section": "eda",
+        "subsection": "bivariate",
+        "kind": "pareto",
+        "title": "region → amount",
+        "text": "Top 20% of **region** groups contribute **26.3%** of total **amount**. ~**4** groups cover 80%.",
+        "metrics": {
+          "cat": "region",
+          "val": "amount",
+          "share20": 0.26338696211078344,
+          "n_groups_80": 4,
+          "top": [
+            [
+              "North",
+              0.26338696211078344
+            ],
+            [
+              "East",
+              0.2592740414044956
+            ],
+            [
+              "South",
+              0.2390541314142081
+            ],
+            [
+              "West",
+              0.2382848650705128
+            ]
+          ]
+        },
+        "ts": 1757588321
+      },
+      {
+        "section": "eda",
+        "subsection": "correlation",
+        "kind": "heatmap",
+        "title": "Top correlations",
+        "text": "amount–amount_plus_tax: 1.00; amount_plus_tax–tax_amount: 1.00; amount–tax_amount: 1.00; base_price–promo_price: 0.97; amount–promo_price: 0.77",
+        "metrics": {
+          "top_pairs": [
+            {
+              "a": "amount",
+              "b": "amount_plus_tax",
+              "r": 0.9999999996028951
+            },
+            {
+              "a": "amount_plus_tax",
+              "b": "tax_amount",
+              "r": 0.9999999189602439
+            },
+            {
+              "a": "amount",
+              "b": "tax_amount",
+              "r": 0.999999907217494
+            },
+            {
+              "a": "base_price",
+              "b": "promo_price",
+              "r": 0.9719190826482976
+            },
+            {
+              "a": "amount",
+              "b": "promo_price",
+              "r": 0.7696576558892452
+            }
+          ],
+          "n_numeric": 13,
+          "method": "pearson"
+        },
+        "ts": 1757588321
+      },
       {
         "section": "summary",
         "subsection": "overview",
         "kind": "kpi",
         "title": "Dataset size",
-        "text": "100,000 rows × 29 columns across 1 table(s).",
+        "text": "8,120 rows × 22 columns across 48 table(s).",
         "metrics": {
-          "rows": 100000,
-          "cols": 29,
-          "n_tables": 1
+          "rows": 8120,
+          "cols": 22,
+          "n_tables": 48
         },
-        "ts": 1757581996
+        "ts": 1757588618
       },
       {
         "section": "summary",
         "subsection": "health",
         "kind": "quality",
         "title": "Data health",
-        "text": "Duplicate rows: 0. Average missing across columns ≈ 10.4%.",
+        "text": "Duplicate rows: 80. Average missing across columns ≈ 3.0%.",
         "metrics": {
-          "duplicates": 0,
-          "avg_missing_pct": 0.1039806896551724
+          "duplicates": 80,
+          "avg_missing_pct": 0.02982534706672638
         },
-        "ts": 1757581996
+        "ts": 1757588618
       }
     ]
   }
