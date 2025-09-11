@@ -2,7 +2,7 @@
 # Runtime: Streamlit app + data
 # ===============================
 streamlit==1.36.0          # UI framework
-pandas==2.2.2              # DataFrames, IO
+pandas>=2.2.3               # DataFrames, IO
 numpy==1.26.4              # Numeric base (pandas/scikit-learn compatible)
 
 # ===============================
@@ -23,7 +23,7 @@ scipy==1.13.1              # Stats functions used by EDA/outliers
 # ===============================
 openpyxl==3.1.5            # Excel .xlsx reader/writer
 xlrd==1.2.0                # Legacy Excel .xls reader (pin: 2.x dropped .xls support)
-pyarrow==16.1.0            # Parquet engine + Arrow tables
+pyarrow>=18             # Parquet engine + Arrow tables
 fastparquet==2024.2.0      # Optional second Parquet engine (safe to remove if slimming)
 
 # ===============================

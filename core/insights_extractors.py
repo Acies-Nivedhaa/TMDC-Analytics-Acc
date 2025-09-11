@@ -222,6 +222,7 @@ def saved_badge() -> None:
     st.caption("✅ saved to **Final Summary**")
 
 
+
 # ======================================================
 # Heuristics & helpers
 # ======================================================
@@ -344,6 +345,46 @@ def _pareto_share(series_by_group: pd.Series) -> Tuple[float, int, List[Tuple[st
     top_items = list(zip(groups[: min(5, len(groups))], shares[: min(5, len(shares))]))
     return (share20, n80, top_items)
 
+def _to_hashable_cell(x):
+    """
+    Convert unhashable cell values (dict/list/set/ndarray, etc.) into a
+    stable, hashable string so DataFrame.duplicated() won't error.
+    """
+    # Sets are unordered; sort for stability
+    if isinstance(x, set):
+        x = sorted(x)
+    # NumPy arrays and similar containers: try tolist()
+    try:
+        if hasattr(x, "tolist"):
+            x = x.tolist()
+    except Exception:
+        pass
+
+    # For dict/list/tuple (or anything JSON-serializable), produce stable JSON
+    if isinstance(x, (dict, list, tuple)):
+        try:
+            return json.dumps(x, sort_keys=True)
+        except Exception:
+            return str(x)
+
+    # Fallback: string representation (covers odd custom objects)
+    try:
+        hash(x)  # if this works, it's already hashable
+        return x
+    except Exception:
+        return str(x)
+
+
+def _duplicated_count_safe(df: pd.DataFrame) -> int:
+    """
+    Count duplicate rows robustly even when cells are unhashable.
+    """
+    try:
+        return int(df.duplicated().sum())
+    except TypeError:
+        df_h = df.astype(object).applymap(_to_hashable_cell)
+        return int(df_h.duplicated().sum())
+
 
 # ======================================================
 # Capture functions (legacy-style + structured)
@@ -361,7 +402,7 @@ def capture_summary_insights(ss, ds_name: str, df: pd.DataFrame, n_tables: int) 
         f"{len(df):,} rows × {df.shape[1]} columns across {n_tables} table(s).",
         tags=["kpi"],
     )
-    dup = int(df.duplicated().sum())
+    dup = _duplicated_count_safe(df)
     miss = float(df.isna().mean().mean() * 100)
     add_insight(
         ss, ds_name, "summary.health", "Data health",

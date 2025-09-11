@@ -1,0 +1,31 @@
+{
+  "icebase.user_engagement.prod_consumer_analytics_events": {
+    "items": [
+      {
+        "section": "summary",
+        "subsection": "overview",
+        "kind": "kpi",
+        "title": "Dataset size",
+        "text": "100,000 rows × 29 columns across 1 table(s).",
+        "metrics": {
+          "rows": 100000,
+          "cols": 29,
+          "n_tables": 1
+        },
+        "ts": 1757581996
+      },
+      {
+        "section": "summary",
+        "subsection": "health",
+        "kind": "quality",
+        "title": "Data health",
+        "text": "Duplicate rows: 0. Average missing across columns ≈ 10.4%.",
+        "metrics": {
+          "duplicates": 0,
+          "avg_missing_pct": 0.1039806896551724
+        },
+        "ts": 1757581996
+      }
+    ]
+  }
+}
